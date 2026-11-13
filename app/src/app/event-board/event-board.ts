@@ -34,6 +34,7 @@ import { assignedPeople, buildPosts, COMMON_POST_ID, taskAssignedTo } from './po
 
 type BoardPage = 'tasks' | 'plan' | 'team' | 'important';
 type HelpAlert = { taskId: string; title: string; group: string };
+const helpAlertDurationMs = 5 * 60_000;
 
 const planLabels = {
   past: 'Прошло',
@@ -442,7 +443,7 @@ export class EventBoard {
         ]);
         this.helpTimers.set(
           task.id,
-          setTimeout(() => this.dismissHelpAlert(task.id), 15_000),
+          setTimeout(() => this.dismissHelpAlert(task.id), helpAlertDurationMs),
         );
       }
     }

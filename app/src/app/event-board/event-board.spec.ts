@@ -279,7 +279,7 @@ describe('EventBoard', () => {
       fixture.detectChanges();
       expect(board.querySelector('.task-status-readonly')?.textContent).toContain('Нужна помощь');
       expect(!!board.querySelector('.help-alert')).toBe(authenticated);
-      vi.advanceTimersByTime(14_999);
+      vi.advanceTimersByTime(299_999);
       fixture.detectChanges();
       expect(!!board.querySelector('.help-alert')).toBe(authenticated);
       vi.advanceTimersByTime(1);
