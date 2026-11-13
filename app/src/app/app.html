@@ -3,133 +3,89 @@
 >
 <header class="site-header" [class.site-header-event]="!!eventPath()">
   <div class="site-bar">
-    <details #themeMenu class="theme-menu" (keydown.escape)="closeTheme()">
-      <summary
-        class="theme-trigger brand"
-        [attr.aria-label]="eventPath() ? 'Оформление и меню' : 'Оформление'"
-        [attr.title]="eventPath() ? 'Оформление и меню' : 'Оформление'"
-      >
-        <span class="brand-mark" aria-hidden="true">
-          <svg
-            class="theme-trigger-icon"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.65"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path
-              d="M12 3a9 9 0 1 0 0 18h1a1.75 1.75 0 0 0 1.23-2.99 1.25 1.25 0 0 1 .89-2.13H18a3 3 0 0 0 3-3A9.9 9.9 0 0 0 12 3Z"
-            />
-            <path d="M7.5 11h.01M10 7.8h.01M14.1 7.8h.01M17.2 11h.01" stroke-width="2.4" />
-          </svg>
-        </span>
-        <span class="brand-label">Регламент</span>
-        <svg
-          class="theme-chevron"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.4"
-          aria-hidden="true"
-        >
-          <path d="m2 4 4 4 4-4" />
-        </svg>
-      </summary>
-      <div class="theme-options" role="group" aria-label="Темы оформления">
-        @for (option of themes; track option.id) {
-          <button
-            type="button"
-            class="theme-option"
-            [attr.data-theme-option]="option.id"
-            [attr.aria-pressed]="theme() === option.id"
-            (click)="selectTheme(option.id)"
-          >
-            <span class="theme-swatch" aria-hidden="true"></span>
-            <span translate="no">{{ option.label }}</span>
-            @if (theme() === option.id) {
-              <svg
-                class="theme-selected"
-                viewBox="0 0 16 16"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.6"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                aria-hidden="true"
-              >
-                <path d="m3 8 3 3 7-7" />
-              </svg>
-            }
-          </button>
-        }
-        @if (eventPath()) {
-          <div class="event-menu-actions">
-            <button type="button" class="theme-option" (click)="copyPublicLink(true)">
-              <svg
-                class="theme-swatch action-glyph"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                aria-hidden="true"
-              >
-                <path
-                  d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1m2 4a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"
-                />
-              </svg>
-              <span>{{ copied() || 'Поделиться' }}</span>
-            </button>
-            @if (shareUrl()) {
-              <input
-                class="event-menu-share-url"
-                aria-label="Общая ссылка"
-                readonly
-                [value]="shareUrl()"
-                (focus)="$event.target.select()"
-              />
-            }
-            <a
-              class="theme-option"
-              routerLink="/admin"
-              [queryParams]="{ view: 'templates' }"
-              (click)="closeTheme()"
+    <a class="brand site-brand" routerLink="/e/regata-demo" aria-label="Регламент">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-label">Регламент</span>
+    </a>
+    @if (eventPath()) {
+      <details #eventMenu class="event-menu" (keydown.escape)="closeMenu()">
+        <summary class="event-menu-trigger brand" aria-label="Меню мероприятия">
+          <span class="brand-mark" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.4"
+              stroke-linecap="round"
             >
-              <svg
-                class="theme-swatch action-glyph"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                aria-hidden="true"
-              >
-                <rect x="8" y="3" width="12" height="14" rx="2.5" />
-                <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
-              </svg>
-              <span>Шаблоны</span>
-            </a>
-            <a class="theme-option" routerLink="/admin" (click)="closeTheme()">
-              <svg
-                class="theme-swatch action-glyph"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.7"
-                stroke-linecap="round"
-                aria-hidden="true"
-              >
-                <circle cx="12" cy="8" r="3.2" />
-                <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" />
-              </svg>
-              <span>Кабинет</span>
-            </a>
-          </div>
-        }
-      </div>
-    </details>
+              <path d="M5 12h.01m6.99 0h.01m6.99 0h.01" />
+            </svg>
+          </span>
+        </summary>
+        <div class="event-menu-actions" role="group" aria-label="Действия мероприятия">
+          <button type="button" class="event-menu-option" (click)="copyPublicLink(true)">
+            <svg
+              class="action-glyph"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <path
+                d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1m2 4a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"
+              />
+            </svg>
+            <span>{{ copied() || 'Поделиться' }}</span>
+          </button>
+          @if (shareUrl()) {
+            <input
+              class="event-menu-share-url"
+              aria-label="Общая ссылка"
+              readonly
+              [value]="shareUrl()"
+              (focus)="$event.target.select()"
+            />
+          }
+          <a
+            class="event-menu-option"
+            routerLink="/admin"
+            [queryParams]="{ view: 'templates' }"
+            (click)="closeMenu()"
+          >
+            <svg
+              class="action-glyph"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <rect x="8" y="3" width="12" height="14" rx="2.5" />
+              <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
+            </svg>
+            <span>Шаблоны</span>
+          </a>
+          <a class="event-menu-option" routerLink="/admin" (click)="closeMenu()">
+            <svg
+              class="action-glyph"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <circle cx="12" cy="8" r="3.2" />
+              <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" />
+            </svg>
+            <span>Кабинет</span>
+          </a>
+        </div>
+      </details>
+    }
     <nav class="site-nav" aria-label="Основная навигация">
       <a
         class="nav-item"

@@ -101,12 +101,6 @@ export class EventBoard {
   protected readonly completedPostTasks = computed(
     () => this.activePost()?.tasks.filter((task) => task.status === 'done') ?? [],
   );
-  protected readonly coordinator = computed(() =>
-    this.event()?.info.find(
-      (item) => /^(главный |дежурный )?координатор$/i.test(item.label.trim()) && item.value.trim(),
-    ),
-  );
-
   private readonly tasks = computed(() => {
     const event = this.event();
     return event ? [...event.tasks, ...event.roles.flatMap((role) => role.tasks)] : [];
