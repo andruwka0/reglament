@@ -9,6 +9,7 @@ import {
   effect,
   inject,
   signal,
+  untracked,
   viewChild,
 } from '@angular/core';
 import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
@@ -18,12 +19,15 @@ import {
   catchError,
   distinctUntilChanged,
   exhaustMap,
+  from,
   interval,
   map,
   merge,
+  mergeMap,
   startWith,
   switchMap,
   tap,
+  type Observable,
 } from 'rxjs';
 import { eventCoverUrl } from '../event.model';
 import type { Event, Task } from '../event.model';
@@ -68,9 +72,12 @@ export class EventBoard {
   private readonly carousel = viewChild<ElementRef<HTMLElement>>('postCarousel');
   private readonly importantHeading = viewChild<ElementRef<HTMLHeadingElement>>('importantHeading');
   private readonly alertTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly sosAlertExpiry = new Map<string, number>();
   protected readonly alerts = signal<BoardAlert[]>([]);
   protected readonly sosPending = signal(new Map<string, symbol>());
   protected readonly sosFeedback = signal(new Map<string, { text: string; error: boolean }>());
+  private readonly sosActiveUntil = signal(new Map<string, number>());
+  private readonly sosNow = signal(Date.now());
   private postScrollTimer?: ReturnType<typeof setTimeout>;
   private readonly selectedPostId = signal('');
   protected readonly mobile = signal(window.matchMedia?.('(max-width: 800px)').matches ?? false);
@@ -86,6 +93,8 @@ export class EventBoard {
   } as const;
 
   protected readonly event = signal<Event | null>(null);
+  protected readonly botUrl = signal<string | null>(null);
+  private readonly eventId = computed(() => this.event()?.id);
   protected readonly coverUrl = computed(() => {
     const event = this.event();
     return event ? eventCoverUrl(event) : null;
@@ -112,6 +121,7 @@ export class EventBoard {
               .filter((id) => id !== COMMON_POST_ID)
           : [],
       ),
+    { equal: (a, b) => a.size === b.size && [...a].every((id) => b.has(id)) },
   );
   private readonly tasks = computed(() => {
     const event = this.event();
@@ -201,6 +211,12 @@ export class EventBoard {
     effect(() => {
       if (!this.organizerSession.authenticated()) this.clearAlerts();
     });
+    effect(() => {
+      const id = this.eventId();
+      const assignee = this.personFilter();
+      const roles = this.ownRoleIds();
+      if (id && assignee) untracked(() => this.loadSosStates(id, assignee, roles));
+    });
     const authentication = toObservable(computed(() => this.organizerSession.authenticated()));
     interval(1000)
       .pipe(takeUntilDestroyed(this.destroyRef))
@@ -218,7 +234,11 @@ export class EventBoard {
           this.pending.set(new Map());
           this.sosPending.set(new Map());
           this.sosFeedback.set(new Map());
-          this.page.set('tasks');
+          this.sosActiveUntil.set(new Map());
+          this.page.set(
+            this.route.snapshot.queryParamMap.get('view') === 'plan' ? 'plan' : 'tasks',
+          );
+          this.botUrl.set(null);
           this.resetTaskFilters();
         }),
         switchMap((id) =>
@@ -235,7 +255,13 @@ export class EventBoard {
               ),
             ),
             authentication.pipe(
-              switchMap(() => this.api.liveEvent(id, (request) => this.showSos(request))),
+              switchMap(() =>
+                this.api.liveEvent(
+                  id,
+                  (request) => this.showSos(request),
+                  (request) => this.removeSos(request),
+                ),
+              ),
             ),
           ),
         ),
@@ -245,10 +271,23 @@ export class EventBoard {
         this.setLatest(event, true);
         this.loadingError.set('');
       });
+
+    this.route.queryParamMap
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe((params) => this.page.set(params.get('view') === 'plan' ? 'plan' : 'tasks'));
+
+    toObservable(this.eventId)
+      .pipe(
+        switchMap((id) => (id ? this.api.eventBot(id).pipe(catchError(() => EMPTY)) : EMPTY)),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe(({ botUrl }) => this.botUrl.set(botUrl));
   }
 
   protected refreshClock() {
-    this.now.set(Math.floor(Date.now() / 60_000));
+    const now = Date.now();
+    this.now.set(Math.floor(now / 60_000));
+    this.sosNow.set(now);
   }
 
   protected changePage(page: BoardPage) {
@@ -371,38 +410,95 @@ export class EventBoard {
       });
   }
 
-  protected requestSos(roleId: string): void {
+  protected toggleSos(roleId: string): void {
     const event = this.event();
     const assignee = this.personFilter();
     const key = this.sosKey(roleId);
     if (!event || !this.ownRoleIds().has(roleId) || this.sosPending().has(key)) return;
 
-    const request = Symbol();
-    this.sosPending.update((pending) => new Map(pending).set(key, request));
+    const cancelling = this.sosActive(key);
+    const request = this.startSos(key);
     this.sosFeedback.update((feedback) => {
       const next = new Map(feedback);
       next.delete(key);
       return next;
     });
-    this.api
-      .requestSos(event.id, roleId, assignee)
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe({
-        next: () => this.finishSos(key, request, 'Запрос помощи отправлен.', false),
-        error: (error: unknown) => this.finishSos(key, request, errorMessage(error), true),
-      });
+    const update: Observable<number | null> = cancelling
+      ? this.api.cancelSos(event.id, roleId, assignee).pipe(map(() => null))
+      : this.api
+          .requestSos(event.id, roleId, assignee)
+          .pipe(map(({ expiresAt }) => expiresAt ?? Date.now() + alertDurationMs.sos));
+    update.pipe(takeUntilDestroyed(this.destroyRef)).subscribe({
+      next: (expiresAt) => {
+        if (!this.finishSos(key, request)) return;
+        this.setSosExpiry(key, expiresAt);
+        const text = cancelling ? 'Запрос помощи отменён.' : 'Запрос помощи отправлен.';
+        this.sosFeedback.update((feedback) => new Map(feedback).set(key, { text, error: false }));
+      },
+      error: (error: unknown) => {
+        if (!this.finishSos(key, request)) return;
+        this.sosFeedback.update((feedback) =>
+          new Map(feedback).set(key, {
+            text: errorMessage(error),
+            error: true,
+          }),
+        );
+        this.loadSosStates(event.id, assignee, [roleId]);
+      },
+    });
   }
 
-  protected sosKey(roleId: string): string {
-    return JSON.stringify([roleId, this.personFilter()]);
+  protected sosKey(roleId: string, assignee = this.personFilter()): string {
+    return JSON.stringify([roleId, assignee]);
   }
 
-  private finishSos(key: string, request: symbol, text: string, error: boolean): void {
+  protected sosActive(key: string): boolean {
+    return (this.sosActiveUntil().get(key) ?? 0) > this.sosNow();
+  }
+
+  private startSos(key: string): symbol {
+    const request = Symbol();
+    this.sosPending.update((pending) => new Map(pending).set(key, request));
+    return request;
+  }
+
+  private finishSos(key: string, request: symbol): boolean {
     const pending = new Map(this.sosPending());
-    if (pending.get(key) !== request) return;
+    if (pending.get(key) !== request) return false;
     pending.delete(key);
     this.sosPending.set(pending);
-    this.sosFeedback.update((feedback) => new Map(feedback).set(key, { text, error }));
+    return true;
+  }
+
+  private loadSosStates(id: string, assignee: string, roles: Iterable<string>): void {
+    from(roles)
+      .pipe(
+        mergeMap((role) => {
+          const key = this.sosKey(role, assignee);
+          if (this.eventId() !== id || this.sosPending().has(key)) return EMPTY;
+          const request = this.startSos(key);
+          return this.api.sosStatus(id, role, assignee).pipe(
+            tap(({ expiresAt }) => {
+              if (this.finishSos(key, request)) this.setSosExpiry(key, expiresAt);
+            }),
+            catchError(() => {
+              this.finishSos(key, request);
+              return EMPTY;
+            }),
+          );
+        }, 4),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe();
+  }
+
+  private setSosExpiry(key: string, expiresAt: number | null): void {
+    this.sosActiveUntil.update((current) => {
+      const next = new Map(current);
+      if (expiresAt && expiresAt > Date.now()) next.set(key, expiresAt);
+      else next.delete(key);
+      return next;
+    });
   }
 
   protected formatDate(date: string): string {
@@ -448,26 +544,43 @@ export class EventBoard {
   private clearAlerts() {
     for (const timer of this.alertTimers.values()) clearTimeout(timer);
     this.alertTimers.clear();
+    this.sosAlertExpiry.clear();
     this.alerts.set([]);
   }
 
-  private showAlert(alert: BoardAlert) {
+  private showAlert(alert: BoardAlert, duration = alertDurationMs[alert.kind]) {
     if (!this.organizerSession.authenticated()) return;
     this.dismissAlert(alert.key);
     this.alerts.update((alerts) => [alert, ...alerts]);
     this.alertTimers.set(
       alert.key,
-      setTimeout(() => this.dismissAlert(alert.key), alertDurationMs[alert.kind]),
+      setTimeout(() => this.dismissAlert(alert.key), duration),
     );
   }
 
   private showSos(request: RoleSos) {
-    this.showAlert({
-      key: JSON.stringify(['sos', request.roleId, request.assignee]),
-      kind: 'sos',
-      role: request.roleTitle,
-      detail: request.assignee,
-    });
+    if (!this.organizerSession.authenticated()) return;
+    const key = 'sos:' + this.sosKey(request.roleId, request.assignee);
+    const now = Date.now();
+    const expiresAt = request.expiresAt ?? now + alertDurationMs.sos;
+    if (!Number.isFinite(expiresAt)) return;
+    if (expiresAt <= now || this.sosAlertExpiry.get(key) === expiresAt) return;
+    this.sosAlertExpiry.set(key, expiresAt);
+    this.showAlert(
+      {
+        key,
+        kind: 'sos',
+        role: request.roleTitle,
+        detail: request.assignee,
+      },
+      expiresAt - now,
+    );
+  }
+
+  private removeSos(request: RoleSos): void {
+    const key = 'sos:' + this.sosKey(request.roleId, request.assignee);
+    this.sosAlertExpiry.delete(key);
+    this.dismissAlert(key);
   }
 
   private notifyCompletedRoles(previous: Event, next: Event) {

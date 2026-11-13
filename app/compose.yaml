@@ -3,6 +3,8 @@ services:
     build: .
     environment:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set an ADMIN_PASSWORD with at least 12 characters or a four-digit PIN}"
+      TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-http://localhost:4177}"
       SECURE_COOKIE: "0"
     ports:
       - "127.0.0.1:${REGLAMENT_HOST_PORT:-4177}:3000"

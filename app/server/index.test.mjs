@@ -49,7 +49,11 @@ async function fixture(t, options) {
 
   function raw(path, { method = 'GET', body, admin, token, authorization, fetchSite, contentType, bytes = false } = {}) {
     const headers = {}
-    if (body !== undefined) headers['Content-Type'] = contentType ?? 'application/json'
+    const payload = body === undefined || Buffer.isBuffer(body) ? body : JSON.stringify(body)
+    if (payload !== undefined) {
+      headers['Content-Type'] = contentType ?? 'application/json'
+      headers['Content-Length'] = Buffer.byteLength(payload)
+    }
     if (admin && cookie) headers.Cookie = cookie
     if (authorization !== undefined) headers.Authorization = authorization
     else if (token) headers.Authorization = `Bearer ${token}`
@@ -65,7 +69,7 @@ async function fixture(t, options) {
         response.on('error', reject)
       })
       request.on('error', reject)
-      request.end(body === undefined || Buffer.isBuffer(body) ? body : JSON.stringify(body))
+      request.end(payload)
     })
   }
 
@@ -253,18 +257,26 @@ test('assigned participants send role SOS only to organizers without changing th
   assert.equal((await send('@volunteer', 'shared')).status, 404)
   assert.equal((await send('@volunteer', 'role-a', { fetchSite: 'cross-site' })).status, 403)
 
-  const message = (assignee) => ({
-    name: 'sos', data: { roleId: 'role-a', roleTitle: event.roles[0].title, assignee },
+  const message = (assignee, expiresAt = clock + 300_000, name = 'sos') => ({
+    name, data: { roleId: 'role-a', roleTitle: event.roles[0].title, assignee, expiresAt },
   })
+  const statusPath = (assignee) => `${path}/roles/role-a/sos?assignee=${encodeURIComponent(assignee)}`
+  assert.deepEqual((await app.request(statusPath('@organizer'))).data, { expiresAt: null })
   const sent = await send(' Organizer ')
   assert.equal(sent.status, 200)
-  assert.deepEqual(sent.data, { sent: true })
+  assert.deepEqual(sent.data, { sent: true, expiresAt: clock + 300_000 })
+  assert.deepEqual((await app.request(statusPath('@organizer'))).data, { expiresAt: sent.data.expiresAt })
   assert.deepEqual(await organizer.nextFrame(), message('@organizer'))
   const duplicate = await send('@organizer')
   assert.equal(duplicate.status, 429)
-  assert.equal(duplicate.headers['retry-after'], '10')
+  assert.equal(duplicate.headers['retry-after'], '300')
   assert.equal((await send('@volunteer')).status, 200)
   assert.deepEqual(await organizer.nextFrame(), message('@volunteer'))
+  assert.equal((await send('@stranger', 'role-a', { method: 'DELETE' })).status, 403)
+  assert.deepEqual((await send('@organizer', 'role-a', { method: 'DELETE' })).data, { cancelled: true })
+  assert.deepEqual(await organizer.nextFrame(), message('@organizer', sent.data.expiresAt, 'sos-cancelled'))
+  assert.deepEqual((await app.request(statusPath('@organizer'))).data, { expiresAt: null })
+  assert.deepEqual((await app.request(statusPath('@volunteer'))).data, { expiresAt: sent.data.expiresAt })
   clock += 10_000
   assert.equal((await send('@organizer')).status, 200)
   assert.deepEqual(await organizer.nextFrame(), message('@organizer'))
@@ -273,11 +285,63 @@ test('assigned participants send role SOS only to organizers without changing th
   const reconnect = await app.stream(`${path}/stream`, { admin: true })
   t.after(() => reconnect.close())
   assert.deepEqual(await reconnect.nextFrame(), { name: 'message', data: event })
+  assert.deepEqual(await reconnect.nextFrame(), message('@organizer'))
+  assert.deepEqual(await reconnect.nextFrame(), message('@volunteer', sent.data.expiresAt))
+  clock += 300_000
+  assert.deepEqual((await app.request(statusPath('@organizer'))).data, { expiresAt: null })
   const updated = await app.request(`/admin${path}`, { method: 'PUT', admin: true, body: { ...event, title: 'Уточнённое название' } })
   const otherUpdated = await app.request(`/admin${otherPath}`, { method: 'PUT', admin: true, body: { ...other.data, title: 'Другая регата 2' } })
   assert.deepEqual(await guest.nextFrame(), { name: 'message', data: updated.data })
   assert.deepEqual(await reconnect.nextFrame(), { name: 'message', data: updated.data })
   assert.deepEqual(await otherOrganizer.nextFrame(), { name: 'message', data: otherUpdated.data })
+})
+
+test('Telegram announcements require an organizer and plan notifications follow saved schedule changes', async (t) => {
+  const planUpdates = []
+  const announcements = []
+  const info = { botUrl: 'https://t.me/test_bot', recipients: 2, connected: 1 }
+  const app = await fixture(t, {
+    telegramToken: 'test-token',
+    telegramFactory: ({ verifyAdminPassword }) => {
+      assert.equal(verifyAdminPassword(password), true)
+      assert.equal(verifyAdminPassword('wrong'), false)
+      return {
+        start() {}, close() {}, info: () => info,
+        notifyPlan: (event) => planUpdates.push(event),
+        announce: (event, text) => {
+          announcements.push({ id: event.id, text })
+          return { queued: 1, recipients: 2 }
+        },
+      }
+    },
+  })
+  const event = await createEvent(app)
+  planUpdates.length = 0
+  const url = `/admin/events/${event.id}`
+  assert.deepEqual((await app.request(`/events/${event.id}/telegram`)).data, { botUrl: info.botUrl })
+  assert.deepEqual((await app.request(`${url}/telegram`, { admin: true })).data, info)
+  assert.equal((await app.request(`${url}/announcements`, { method: 'POST', body: { text: 'Команде' } })).status, 401)
+  assert.equal((await app.request(`${url}/announcements`, { method: 'POST', admin: true, body: { text: ' ' } })).status, 400)
+  const queued = await app.request(`${url}/announcements`, { method: 'POST', admin: true, body: { text: '  Команде  ' } })
+  assert.equal(queued.status, 202)
+  assert.deepEqual(queued.data, { queued: 1, recipients: 2 })
+  assert.deepEqual(announcements, [{ id: event.id, text: 'Команде' }])
+
+  const save = (body) => app.request(url, { method: 'PUT', admin: true, body })
+  const edited = await save({ ...event, description: 'Новое описание' })
+  assert.equal(edited.status, 200)
+  assert.equal(planUpdates.length, 0)
+  const revised = { ...edited.data, timeline: [{ ...event.timeline[0], start: '16:00' }] }
+  assert.equal((await save({ ...revised, revision: event.revision })).status, 409)
+  assert.equal(planUpdates.length, 0)
+  const changed = await save(revised)
+  assert.equal(changed.status, 200)
+  assert.deepEqual(planUpdates, [changed.data])
+  const taskUpdated = await app.request(`/events/${event.id}/tasks/role-default/status`, {
+    method: 'POST', body: { status: 'done', assignee: '@organizer' },
+  })
+  assert.equal(taskUpdated.status, 200)
+  assert.equal(planUpdates.length, 1)
 })
 
 test('migrates existing events and persists a public cover independently of draft revisions', async (t) => {

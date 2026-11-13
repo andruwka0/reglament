@@ -7,6 +7,7 @@ export interface RoleSos {
   roleId: string;
   roleTitle: string;
   assignee: string;
+  expiresAt?: number;
 }
 
 @Service()
@@ -17,7 +18,11 @@ export class TrackerApi {
     return this.http.get<Event>(this.eventPath(id));
   }
 
-  liveEvent(id: string, onSos: (request: RoleSos) => void = () => {}): Observable<Event> {
+  liveEvent(
+    id: string,
+    onSos: (request: RoleSos) => void = () => {},
+    onSosCancelled: (request: RoleSos) => void = () => {},
+  ): Observable<Event> {
     return new Observable((subscriber) => {
       if (typeof EventSource === 'undefined') {
         subscriber.complete();
@@ -34,21 +39,24 @@ export class TrackerApi {
         if (snapshot?.id === id && Number.isSafeInteger(snapshot.revision))
           subscriber.next(snapshot);
       });
-      source.addEventListener('sos', (message) => {
-        let request: RoleSos | null;
-        try {
-          request = JSON.parse((message as MessageEvent<string>).data);
-        } catch {
-          return;
-        }
-        if (
-          typeof request?.roleId === 'string' &&
-          typeof request.roleTitle === 'string' &&
-          typeof request.assignee === 'string'
-        ) {
-          onSos(request);
-        }
-      });
+      const listenForSos = (name: string, handle: (request: RoleSos) => void) =>
+        source.addEventListener(name, (message) => {
+          let request: RoleSos | null;
+          try {
+            request = JSON.parse((message as MessageEvent<string>).data);
+          } catch {
+            return;
+          }
+          if (
+            typeof request?.roleId === 'string' &&
+            typeof request.roleTitle === 'string' &&
+            typeof request.assignee === 'string'
+          ) {
+            handle(request);
+          }
+        });
+      listenForSos('sos', onSos);
+      listenForSos('sos-cancelled', onSosCancelled);
       return () => source.close();
     });
   }
@@ -59,8 +67,19 @@ export class TrackerApi {
   }
 
   requestSos(id: string, roleId: string, assignee: string) {
-    const path = this.eventPath(id) + '/roles/' + encodeURIComponent(roleId) + '/sos';
-    return this.http.post<{ sent: true }>(path, { assignee });
+    return this.http.post<{ sent: true; expiresAt?: number }>(this.sosPath(id, roleId), {
+      assignee,
+    });
+  }
+
+  cancelSos(id: string, roleId: string, assignee: string) {
+    return this.http.delete<{ cancelled: true }>(this.sosPath(id, roleId), { body: { assignee } });
+  }
+
+  sosStatus(id: string, roleId: string, assignee: string) {
+    return this.http.get<{ expiresAt: number | null }>(this.sosPath(id, roleId), {
+      params: { assignee },
+    });
   }
 
   session() {
@@ -77,6 +96,23 @@ export class TrackerApi {
 
   catalog() {
     return this.http.get<Catalog>('/api/admin/catalog');
+  }
+
+  eventBot(id: string) {
+    return this.http.get<{ botUrl: string | null }>(this.eventPath(id) + '/telegram');
+  }
+
+  telegramInfo(id: string) {
+    return this.http.get<{ botUrl: string | null; recipients: number; connected: number }>(
+      '/api/admin/events/' + encodeURIComponent(id) + '/telegram',
+    );
+  }
+
+  announce(id: string, text: string) {
+    return this.http.post<{ queued: number; recipients: number }>(
+      '/api/admin/events/' + encodeURIComponent(id) + '/announcements',
+      { text },
+    );
   }
 
   createEvent(title: string, date: string, templateId?: string) {
@@ -113,6 +149,10 @@ export class TrackerApi {
 
   private eventPath(id: string) {
     return '/api/events/' + encodeURIComponent(id);
+  }
+
+  private sosPath(id: string, roleId: string) {
+    return this.eventPath(id) + '/roles/' + encodeURIComponent(roleId) + '/sos';
   }
 }
 

@@ -7,6 +7,68 @@ import { Organizer } from './organizer';
 import { TrackerApi } from '../tracker-api';
 
 describe('Organizer', () => {
+  it('queues a Telegram announcement only for the open event', async () => {
+    const queryParamMap = convertToParamMap({});
+    const event: TrackerEvent = {
+      id: 'telegram-event', revision: 1, title: 'Турнир', date: '', location: '', description: '',
+      info: [], timeline: [], roles: [], tasks: [],
+    };
+    const botUrl = 'https://t.me/demo_tracker_bot?start=telegram-event';
+    const telegramInfo = vi.fn(() => of({ botUrl: botUrl as string | null, recipients: 3, connected: 2 }));
+    const announce = vi.fn(() => of({ queued: 2, recipients: 2 }));
+    TestBed.configureTestingModule({
+      imports: [Organizer],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap }, queryParamMap: of(queryParamMap) } },
+        { provide: TrackerApi, useValue: {
+          session: () => of({ authenticated: true }),
+          catalog: () => of({ events: [event], templates: [] }),
+          telegramInfo, announce,
+        } },
+      ],
+    });
+    const fixture = TestBed.createComponent(Organizer);
+    await fixture.whenStable();
+    const page: HTMLElement = fixture.nativeElement;
+    const button = (name: string) => [...page.querySelectorAll('button')]
+      .find((element) => element.textContent?.trim() === name)!;
+
+    button('Редактировать').click();
+    await fixture.whenStable();
+    expect(telegramInfo).not.toHaveBeenCalled();
+    button('Уведомления').click();
+    await fixture.whenStable();
+    expect(telegramInfo).toHaveBeenCalledExactlyOnceWith(event.id);
+    expect(page.textContent).toContain('2 из 3');
+    expect(page.querySelector(`a[href="${botUrl}"]`)).not.toBeNull();
+
+    const send = button('Отправить в Telegram');
+    expect(send.disabled).toBe(true);
+    const message = page.querySelector<HTMLTextAreaElement>('#announcement-text')!;
+    message.value = '   ';
+    message.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    expect(send.disabled).toBe(true);
+
+    message.value = '  Начинаем через пять минут!  ';
+    message.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    send.click();
+    await fixture.whenStable();
+    expect(announce).toHaveBeenCalledExactlyOnceWith(event.id, 'Начинаем через пять минут!');
+    expect(page.textContent).toContain('Поставлено в очередь: 2');
+    expect(message.value).toBe('');
+
+    expect(page.textContent).toContain('/admin');
+
+    telegramInfo.mockReturnValueOnce(of({ botUrl: null, recipients: 3, connected: 2 }));
+    button('Обновить данные').click();
+    await fixture.whenStable();
+    expect(page.textContent).toContain('Telegram-бот пока недоступен');
+    expect(button('Отправить в Telegram')).toBeUndefined();
+  });
+
   it('keeps legacy task state until the completion checkbox changes', async () => {
     const queryParamMap = convertToParamMap({});
     const stored: TrackerEvent = {

@@ -2,7 +2,7 @@ import { NgTemplateOutlet } from '@angular/common';
 import { Component, computed, inject, signal, viewChild, ElementRef } from '@angular/core';
 import { FormField, applyEach, form, maxLength, readonly, required, validate } from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
-import { toSignal } from '@angular/core/rxjs-interop';
+import { rxResource, toSignal } from '@angular/core/rxjs-interop';
 import { firstValueFrom, map } from 'rxjs';
 import { errorMessage, TrackerApi } from '../tracker-api';
 import { formatCoverImage } from '../cover-image';
@@ -66,6 +66,7 @@ const sections = [
   { id: 'roles', label: 'Роли' },
   { id: 'tasks', label: 'Общие задачи' },
   { id: 'links', label: 'Ссылки' },
+  { id: 'notifications', label: 'Уведомления' },
 ] as const;
 type Section = typeof sections[number]['id'];
 
@@ -130,6 +131,28 @@ export class Organizer {
   protected readonly section = signal<Section>('intro');
   protected readonly addedRoleId = signal('');
   protected readonly sections = sections;
+  protected readonly telegram = rxResource({
+    params: () => this.authenticated() && this.section() === 'notifications'
+      ? this.visibleEditor()?.id : undefined,
+    stream: ({ params: eventId }) => this.api.telegramInfo(eventId),
+  });
+  protected readonly announcementLimit = 3000;
+  protected readonly announcement = signal({ text: '' });
+  protected readonly announcementBusy = signal(false);
+  protected readonly announcementError = signal('');
+  protected readonly announcementFeedback = signal('');
+  protected readonly telegramError = errorMessage;
+  protected readonly announcementForm = form(this.announcement, (field) => {
+    required(field.text);
+    maxLength(field.text, this.announcementLimit);
+    readonly(field.text, () => this.announcementBusy());
+  });
+  protected readonly canAnnounce = computed(() => {
+    if (!this.telegram.hasValue() || this.telegram.isLoading()) return false;
+    const { botUrl, connected } = this.telegram.value();
+    return !!botUrl && connected > 0 && !this.announcementBusy()
+      && !this.announcementForm().invalid() && !!this.announcement().text.trim();
+  });
   protected readonly saving = signal(false);
   protected readonly error = signal('');
   protected readonly feedback = signal('');
@@ -376,6 +399,31 @@ export class Organizer {
     this.section.set(section);
   }
 
+  protected async sendAnnouncement(event: SubmitEvent) {
+    event.preventDefault();
+    const current = this.visibleEditor();
+    if (!current || !this.canAnnounce()) return;
+    const draft = this.announcement();
+    this.announcementBusy.set(true);
+    this.announcementError.set('');
+    this.announcementFeedback.set('');
+    try {
+      const { queued, recipients } = await firstValueFrom(this.api.announce(current.id, draft.text.trim()));
+      if (this.visibleEditor()?.id !== current.id) return;
+      if (queued > 0) {
+        if (this.announcement() === draft) this.announcement.set({ text: '' });
+        this.announcementFeedback.set(`Поставлено в очередь: ${queued} из ${recipients}. Бот отправит сообщения по мере обработки.`);
+      } else {
+        this.announcementFeedback.set('В очередь не добавлено ни одного сообщения. Обновите число подключённых участников.');
+        this.telegram.reload();
+      }
+    } catch (error) {
+      if (this.visibleEditor()?.id === current.id) this.announcementError.set(errorMessage(error));
+    } finally {
+      this.announcementBusy.set(false);
+    }
+  }
+
   protected addInfo(kind: InfoKind) {
     this.draft.update((event) => ({ ...event, info: [
       ...event.info, { id: crypto.randomUUID(), kind, label: '', value: '' },
@@ -436,6 +484,9 @@ export class Organizer {
   private loadEditor(event: Event) {
     this.coverError.set('');
     this.coverFeedback.set('');
+    this.announcement.set({ text: '' });
+    this.announcementError.set('');
+    this.announcementFeedback.set('');
     this.baseline.set(event);
     this.draft.set(toEditor(event));
     this.section.set('intro');

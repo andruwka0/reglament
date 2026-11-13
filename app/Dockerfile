@@ -21,7 +21,7 @@ ENV NODE_ENV=production \
 
 RUN install -d -m 0700 -o node -g node /var/lib/reglament
 COPY --from=build --link /app/dist/regatta-tracker/browser ./dist/regatta-tracker/browser
-COPY --link server/index.mjs server/demo.json ./server/
+COPY --link server/index.mjs server/telegram.mjs server/demo.json ./server/
 
 USER node
 EXPOSE 3000

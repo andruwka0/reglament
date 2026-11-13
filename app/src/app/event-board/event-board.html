@@ -692,6 +692,11 @@
   </ng-template>
 
   <ng-template #infoContent>
+    @if (botUrl(); as url) {
+      <a class="button secondary" [href]="url" target="_blank" rel="noopener noreferrer">
+        Подключить уведомления в Telegram
+      </a>
+    }
     @if (board.description) {
       <p class="event-intro">{{ board.description }}</p>
     }
@@ -716,7 +721,7 @@
           </div>
         }
       </div>
-    } @else if (!board.description) {
+    } @else if (!board.description && !botUrl()) {
       <p class="muted">Важная информация пока не добавлена.</p>
     }
   </ng-template>
@@ -788,14 +793,16 @@
 
 <ng-template #sosControl let-roleId>
   @if (ownRoleIds().has(roleId)) {
+    @let key = sosKey(roleId);
+    @let active = sosActive(key);
     <button
       class="button sos-button"
       type="button"
-      [disabled]="sosPending().has(sosKey(roleId))"
-      aria-label="SOS: запросить помощь"
-      (click)="requestSos(roleId)"
+      [disabled]="sosPending().has(key)"
+      [attr.aria-label]="active ? 'Отменить SOS' : 'SOS: запросить помощь'"
+      (click)="toggleSos(roleId)"
     >
-      SOS
+      {{ active ? 'Отменить SOS' : 'SOS' }}
     </button>
   }
 </ng-template>

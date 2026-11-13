@@ -5,6 +5,7 @@ import { createServer } from 'node:http'
 import { extname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
+import { createTelegram } from './telegram.mjs'
 
 const statuses = new Set(['todo', 'doing', 'blocked', 'done'])
 const idPattern = /^[A-Za-z0-9_-]{1,80}$/
@@ -13,7 +14,7 @@ const tokenPattern = /^[A-Za-z0-9_-]{43}$/
 const cookieName = 'regatta_session'
 const sessionDuration = 12 * 60 * 60 * 1000
 const loginWindow = 15 * 60 * 1000
-const sosCooldownMs = 10_000
+const sosDurationMs = 5 * 60_000
 const maxBodyBytes = 512 * 1024
 const maxCoverBytes = 1024 * 1024
 const maxListLength = 150
@@ -126,6 +127,15 @@ function scheduleItem(item) {
     title: titleOf(item.title), description: descriptionOf(item.description),
     start: time(item.start), end: time(item.end),
   }
+}
+
+function planChanged(previous, next) {
+  const schedule = (event) => {
+    const fields = ({ title, description, start, end }) => [title, description, start, end]
+    const tasks = [...event.tasks, ...event.roles.flatMap((role) => role.tasks)]
+    return [event.date, event.timeline.map(fields), tasks.filter((task) => task.start || task.end).map(fields)]
+  }
+  return JSON.stringify(schedule(previous)) !== JSON.stringify(schedule(next))
 }
 
 function normalizeEvent(value, id, revision) {
@@ -505,6 +515,7 @@ async function staticFile(response, method, path, directory) {
 
 export function createTrackerServer({
   password, dataDir = 'data', staticDir = 'dist/regatta-tracker/browser', demo, secureCookie = false,
+  telegramToken, publicOrigin = 'https://reglament.andruwka.site', telegramFactory = createTelegram,
 } = {}) {
   if (typeof password !== 'string' || (password.length < 12 && !/^[0-9]{4}$/.test(password))) {
     throw new Error('Задайте ADMIN_PASSWORD из четырёх цифр или длиной от 12 символов.')
@@ -512,10 +523,15 @@ export function createTrackerServer({
   const store = openStore(resolve(dataDir), demo)
   const directory = resolve(staticDir)
   const passwordHash = digest(password)
+  const verifyAdminPassword = (value) => typeof value === 'string' && timingSafeEqual(passwordHash, digest(value))
+  const telegram = telegramToken ? telegramFactory({
+    token: telegramToken, dataDir: resolve(dataDir), publicOrigin, verifyAdminPassword,
+    listEvents: () => store.catalog().events, getEvent: store.getEvent,
+  }) : null
   const sessions = new Map()
   const loginAttempts = new Map()
   const eventStreams = new Map()
-  const recentSos = new Map()
+  const roleSosRequests = new Map()
 
   function writeStream(response, data) {
     if (response.destroyed || response.writableEnded) return
@@ -536,12 +552,19 @@ export function createTrackerServer({
     eventStreams.set(response, { id, cookie })
     response.once('close', () => eventStreams.delete(response))
     writeStream(response, `retry: 3000\ndata: ${JSON.stringify(event)}\n\n`)
+    if (authenticated(cookie)) {
+      for (const { eventId, alert, cancelled } of roleSosRequests.values()) {
+        if (eventId === id && alert.expiresAt > Date.now()) {
+          writeStream(response, `event: ${cancelled ? 'sos-cancelled' : 'sos'}\ndata: ${JSON.stringify(alert)}\n\n`)
+        }
+      }
+    }
   }
 
   function broadcast(eventId, data, name) {
     let frame
     for (const [stream, { id, cookie }] of eventStreams) {
-      if (id !== eventId || (name === 'sos' && !authenticated(cookie))) continue
+      if (id !== eventId || (name && !authenticated(cookie))) continue
       frame ??= `${name ? `event: ${name}\n` : ''}data: ${JSON.stringify(data)}\n\n`
       writeStream(stream, frame)
     }
@@ -552,32 +575,47 @@ export function createTrackerServer({
     broadcast(event.id, event)
   }
 
-  async function sendSos(eventId, roleId, request, response) {
-    const body = await readBody(request)
+  async function handleRoleSos(eventId, roleId, request, response) {
+    const assignee = person(request.method === 'GET'
+      ? new URL(request.url, 'http://localhost').searchParams.get('assignee') ?? ''
+      : (await readBody(request)).assignee ?? '')
     const role = store.getEvent(eventId).roles.find((item) => item.id === roleId)
     if (!role) throw new RequestError(404, 'Роль не найдена.')
-    const assignee = person(body.assignee ?? '')
-    if (!assignee) throw new RequestError(403, 'Выберите участника в Telegram, чтобы отправить SOS.')
+    if (!assignee) throw new RequestError(403, 'Выберите участника в Telegram.')
     if (!role.assignees.includes(assignee) && !role.tasks.some((task) => task.assignees.includes(assignee))) {
       throw new RequestError(403, 'Эта роль не назначена выбранному участнику.')
     }
 
     const key = `${eventId}/${roleId}/${assignee}`
     const now = Date.now()
-    const expires = recentSos.get(key)
-    if (expires > now) {
-      response.setHeader('Retry-After', Math.ceil((expires - now) / 1000))
-      throw new RequestError(429, 'SOS уже отправлен. Подождите перед повтором.')
+    const existing = roleSosRequests.get(key)
+    const active = existing && !existing.cancelled && existing.alert.expiresAt > now
+    if (request.method === 'GET') {
+      return writeJson(response, 200, { expiresAt: active ? existing.alert.expiresAt : null })
     }
-    recentSos.set(key, now + sosCooldownMs)
-    broadcast(eventId, { roleId, roleTitle: role.title, assignee }, 'sos')
-    return writeJson(response, 200, { sent: true })
+    if (request.method === 'DELETE') {
+      if (active) {
+        existing.cancelled = true
+        broadcast(eventId, existing.alert, 'sos-cancelled')
+      }
+      return writeJson(response, 200, { cancelled: true })
+    }
+    if (active) {
+      response.setHeader('Retry-After', Math.ceil((existing.alert.expiresAt - now) / 1000))
+      throw new RequestError(429, 'SOS уже отправлен. Его можно отменить.')
+    }
+    const alert = { roleId, roleTitle: role.title, assignee, expiresAt: now + sosDurationMs }
+    roleSosRequests.set(key, { eventId, alert, cancelled: false })
+    broadcast(eventId, alert, 'sos')
+    return writeJson(response, 200, { sent: true, expiresAt: alert.expiresAt })
   }
 
   const heartbeat = setInterval(() => {
     for (const stream of eventStreams.keys()) writeStream(stream, ': heartbeat\n\n')
     const now = Date.now()
-    for (const [key, expires] of recentSos) if (expires <= now) recentSos.delete(key)
+    for (const [key, { alert }] of roleSosRequests) {
+      if (alert.expiresAt <= now) roleSosRequests.delete(key)
+    }
   }, streamHeartbeatMs)
   heartbeat.unref()
 
@@ -606,7 +644,7 @@ export function createTrackerServer({
     if (entry.count >= 15) {
       throw new RequestError(429, 'Слишком много попыток входа. Попробуйте позже.')
     }
-    if (typeof body.password !== 'string' || !timingSafeEqual(passwordHash, digest(body.password))) {
+    if (!verifyAdminPassword(body.password)) {
       entry.count++
       loginAttempts.set(ip, entry)
       throw new RequestError(401, 'Неверный пароль.')
@@ -664,26 +702,52 @@ export function createTrackerServer({
       if (path === '/api/admin/templates' && method === 'POST') {
         return writeJson(response, 201, store.createTemplate(await readBody(request)))
       }
-      const adminEvent = path.match(/^\/api\/admin\/events\/([^/]+)(?:\/(invites|cover))?$/)
+      const adminEvent = path.match(/^\/api\/admin\/events\/([^/]+)(?:\/(invites|cover|telegram|announcements))?$/)
       if (adminEvent) {
         const [, rawId, action] = adminEvent
         const id = identifier(rawId)
         if (action === 'invites' && method === 'GET') return writeJson(response, 200, store.invites(id))
         if (action === 'cover' && method === 'PUT') return publishEvent(response, store.saveCover(id, await readCover(request)))
         if (action === 'cover' && method === 'DELETE') return publishEvent(response, store.removeCover(id))
-        if (!action && method === 'PUT') return publishEvent(response, store.updateEvent(id, await readBody(request)))
+        if (action === 'telegram' && method === 'GET') {
+          const event = store.getEvent(id)
+          return writeJson(response, 200, telegram?.info(event) ?? { botUrl: null, recipients: 0, connected: 0 })
+        }
+        if (action === 'announcements' && method === 'POST') {
+          const text = string((await readBody(request)).text, 'Сообщение', 3000, true)
+          const event = store.getEvent(id)
+          if (!telegram?.info(event).botUrl) throw new RequestError(503, 'Бот Telegram пока недоступен.')
+          return writeJson(response, 202, telegram.announce(event, text))
+        }
+        if (!action && method === 'PUT') {
+          const body = await readBody(request)
+          const previous = telegram ? store.getEvent(id) : null
+          const event = store.updateEvent(id, body)
+          if (previous && planChanged(previous, event)) {
+            try {
+              telegram.notifyPlan(event)
+            } catch {
+              console.error('Не удалось поставить в очередь уведомление об изменении плана.')
+            }
+          }
+          return publishEvent(response, event)
+        }
       }
     }
     const roleSos = path.match(/^\/api\/events\/([^/]+)\/roles\/([^/]+)\/sos$/)
-    if (roleSos && method === 'POST') {
-      return sendSos(identifier(roleSos[1]), identifier(roleSos[2]), request, response)
+    if (roleSos && ['GET', 'POST', 'DELETE'].includes(method)) {
+      return handleRoleSos(identifier(roleSos[1]), identifier(roleSos[2]), request, response)
     }
-    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|tasks\/([^/]+)\/status))?$/)
+    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|telegram|tasks\/([^/]+)\/status))?$/)
     if (publicEvent) {
       const [, rawEventId, action, taskId] = publicEvent
       const eventId = identifier(rawEventId)
       if (!action && method === 'GET') return writeJson(response, 200, store.getEvent(eventId))
       if (action === 'stream' && method === 'GET') return streamEvent(eventId, cookie, response)
+      if (action === 'telegram' && method === 'GET') {
+        const event = store.getEvent(eventId)
+        return writeJson(response, 200, { botUrl: telegram?.info(event).botUrl ?? null })
+      }
       if (action === 'cover' && method === 'GET') {
         const { mime, bytes } = store.getCover(eventId)
         response.writeHead(200, { 'Content-Type': mime, 'Content-Length': bytes.length, 'Cache-Control': 'no-store' })
@@ -713,10 +777,12 @@ export function createTrackerServer({
       return writeJson(response, 500, { error: 'Не удалось выполнить запрос. Попробуйте ещё раз.' })
     })
   })
+  server.once('listening', () => telegram?.start())
   server.once('close', () => {
     clearInterval(heartbeat)
     for (const stream of eventStreams.keys()) stream.destroy()
     eventStreams.clear()
+    telegram?.close()
     store.close()
   })
   return server
@@ -732,6 +798,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     dataDir: process.env.DATA_DIR,
     staticDir: process.env.STATIC_DIR,
     secureCookie: process.env.SECURE_COOKIE === '1',
+    telegramToken: process.env.TELEGRAM_BOT_TOKEN,
+    publicOrigin: process.env.PUBLIC_ORIGIN,
     demo,
   })
   server.listen(port, host, () => console.log(`Трекер доступен по адресу http://${host}:${server.address().port}`))

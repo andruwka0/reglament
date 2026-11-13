@@ -46,7 +46,7 @@
           </button>
         }
       </nav>
-      <form class="edit-section" (submit)="save($event)">
+      <form class="edit-section" (submit)="section() === 'notifications' ? sendAnnouncement($event) : save($event)">
         @switch (section()) {
           @case ('intro') {
             <div class="form-grid">
@@ -150,12 +150,54 @@
               <button class="button secondary" type="button" (click)="copy(publicUrl.value, publicUrl)">Копировать</button>
             </div>
           }
+          @case ('notifications') {
+            <h3>Рассылка в Telegram</h3>
+            @if (telegram.hasValue() && telegram.value(); as info) {
+              <p class="muted">Подключили бота: {{ info.connected }} из {{ info.recipients }} участников, назначенных на задачи.</p>
+              @if (info.botUrl; as url) {
+                <div class="inline-actions link-row">
+                  <input #botLink aria-label="Ссылка на Telegram-бота для участников" readonly [value]="url">
+                  <button class="button secondary" type="button" (click)="copy(url, botLink)">Копировать ссылку</button>
+                  <a class="button ghost" [href]="url" target="_blank" rel="noopener noreferrer">Открыть бота</a>
+                </div>
+                <p class="muted">Для входа организатора отправьте боту <code>/admin</code> и введите пароль от сайта в личном чате с ботом.</p>
+                @if (info.connected > 0) {
+                  <label class="field" for="announcement-text">Текст объявления
+                    <textarea id="announcement-text" rows="4" [formField]="announcementForm.text"></textarea>
+                  </label>
+                  <div class="inline-actions">
+                    <button class="button primary" type="submit" [disabled]="!canAnnounce()">
+                      {{ announcementBusy() ? 'Ставим в очередь…' : 'Отправить в Telegram' }}
+                    </button>
+                  </div>
+                } @else {
+                  <p class="muted">Чтобы отправить объявление, попросите участников открыть ссылку и нажать «Старт» в боте.</p>
+                }
+              } @else {
+                <p class="notice">Telegram-бот пока недоступен.</p>
+              }
+            } @else if (telegram.error(); as problem) {
+              <p class="notice error" role="alert" [textContent]="telegramError(problem)"></p>
+            }
+            @if (telegram.isLoading()) {
+              <p class="muted" role="status">Обновляем данные Telegram…</p>
+            } @else {
+              <div class="inline-actions">
+                <button class="button ghost" type="button" [disabled]="announcementBusy()" (click)="telegram.reload()">Обновить данные</button>
+              </div>
+            }
+            @if (announcementError(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
+            @if (announcementFeedback(); as message) { <p class="notice" role="status" [textContent]="message"></p> }
+            @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
+          }
         }
-        <div class="editor-actions inline-actions">
-          <button class="button primary" type="submit" [disabled]="!dirty() || saving() || coverBusy() || editForm().invalid()">{{ saving() ? 'Сохраняем…' : 'Сохранить изменения' }}</button>
-          @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
-          @if (error()) { <button class="button ghost" type="button" (click)="reloadEvent()">Загрузить сохранённую версию</button> }
-        </div>
+        @if (section() !== 'notifications') {
+          <div class="editor-actions inline-actions">
+            <button class="button primary" type="submit" [disabled]="!dirty() || saving() || coverBusy() || editForm().invalid()">{{ saving() ? 'Сохраняем…' : 'Сохранить изменения' }}</button>
+            @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
+            @if (error()) { <button class="button ghost" type="button" (click)="reloadEvent()">Загрузить сохранённую версию</button> }
+          </div>
+        }
       </form>
     </section>
   } @else {

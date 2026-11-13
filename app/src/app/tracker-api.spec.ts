@@ -20,6 +20,22 @@ describe('TrackerApi', () => {
     http.verify();
   });
 
+  it('reads and cancels an active SOS using the selected participant', () => {
+    TestBed.configureTestingModule({
+      providers: [provideHttpClient(), provideHttpClientTesting()],
+    });
+    const api = TestBed.inject(TrackerApi);
+    const http = TestBed.inject(HttpTestingController);
+    const path = '/api/events/regata-demo/roles/welcome/sos';
+    api.sosStatus('regata-demo', 'welcome', '@volunteer').subscribe();
+    http.expectOne({ method: 'GET', url: path + '?assignee=@volunteer' }).flush({ expiresAt: null });
+    api.cancelSos('regata-demo', 'welcome', '@volunteer').subscribe();
+    const cancellation = http.expectOne({ method: 'DELETE', url: path });
+    expect(cancellation.request.body).toEqual({ assignee: '@volunteer' });
+    cancellation.flush({ cancelled: true });
+    http.verify();
+  });
+
   it('receives valid snapshots, leaves reconnects to EventSource and closes on unsubscribe', () => {
     TestBed.configureTestingModule({
       providers: [provideHttpClient(), provideHttpClientTesting()],
@@ -35,8 +51,9 @@ describe('TrackerApi', () => {
     try {
       const next = vi.fn();
       const onSos = vi.fn();
+      const onSosCancelled = vi.fn();
       const subscription = TestBed.inject(TrackerApi)
-        .liveEvent('regata-demo', onSos)
+        .liveEvent('regata-demo', onSos, onSosCancelled)
         .subscribe(next);
       expect(open).toHaveBeenCalledWith('/api/events/regata-demo/stream');
       source.dispatchEvent(new MessageEvent('message', { data: 'bad JSON' }));
@@ -49,6 +66,8 @@ describe('TrackerApi', () => {
       const sos = { roleId: 'welcome', roleTitle: 'Регистрация', assignee: '@volunteer' };
       source.dispatchEvent(new MessageEvent('sos', { data: JSON.stringify(sos) }));
       expect(onSos).toHaveBeenCalledExactlyOnceWith(sos);
+      source.dispatchEvent(new MessageEvent('sos-cancelled', { data: JSON.stringify(sos) }));
+      expect(onSosCancelled).toHaveBeenCalledExactlyOnceWith(sos);
       subscription.unsubscribe();
       expect(source.close).toHaveBeenCalledTimes(1);
     } finally {

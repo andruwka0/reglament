@@ -48,11 +48,20 @@ const event: Event = {
   revision: 1,
 };
 
-function render(fragment: string | null = null, initialEvent = event, authenticated = false) {
+function render(
+  fragment: string | null = null,
+  initialEvent = event,
+  authenticated = false,
+  view?: string,
+) {
   const loadEvent = vi.fn().mockReturnValue(of(initialEvent));
+  const queryParamMap = convertToParamMap(view ? { view } : {});
   const updates = new Subject<Event>();
   let receiveSos: ((request: RoleSos) => void) | undefined;
+  let receiveCancellation: ((request: RoleSos) => void) | undefined;
   const requestSos = vi.fn().mockReturnValue(of({ sent: true }));
+  const cancelSos = vi.fn().mockReturnValue(of({ cancelled: true }));
+  const sosStatus = vi.fn().mockReturnValue(of({ expiresAt: null }));
   const updateStatus = vi.fn().mockImplementation((_id, taskId, status) =>
     of({
       ...event,
@@ -74,6 +83,8 @@ function render(fragment: string | null = null, initialEvent = event, authentica
         provide: ActivatedRoute,
         useValue: {
           paramMap: new BehaviorSubject(convertToParamMap({ id: event.id })),
+          snapshot: { queryParamMap },
+          queryParamMap: new BehaviorSubject(queryParamMap),
           fragment: new BehaviorSubject(fragment),
         },
       },
@@ -81,12 +92,20 @@ function render(fragment: string | null = null, initialEvent = event, authentica
         provide: TrackerApi,
         useValue: {
           event: loadEvent,
-          liveEvent: (_id: string, onSos: (request: RoleSos) => void) => {
+          eventBot: () => of({ botUrl: 'https://t.me/test_bot?start=event_regatta' }),
+          liveEvent: (
+            _id: string,
+            onSos: (request: RoleSos) => void,
+            onSosCancelled: (request: RoleSos) => void,
+          ) => {
             receiveSos = onSos;
+            receiveCancellation = onSosCancelled;
             return updates;
           },
           updateStatus,
           requestSos,
+          cancelSos,
+          sosStatus,
         },
       },
       { provide: OrganizerSession, useValue: { authenticated: () => authenticated } },
@@ -101,11 +120,32 @@ function render(fragment: string | null = null, initialEvent = event, authentica
     fixture.detectChanges();
   };
   const sendSos = (request: RoleSos) => receiveSos!(request);
-  return { board, fixture, loadEvent, updateStatus, change, updates, requestSos, sendSos };
+  const sendCancellation = (request: RoleSos) => receiveCancellation!(request);
+  return {
+    board,
+    fixture,
+    loadEvent,
+    updateStatus,
+    change,
+    updates,
+    requestSos,
+    cancelSos,
+    sosStatus,
+    sendSos,
+    sendCancellation,
+  };
 }
 
 describe('EventBoard', () => {
   afterEach(() => window.localStorage.removeItem('reglament-person:regatta'));
+
+  it('opens the day plan from Telegram and exposes the notification subscription', () => {
+    const { board } = render(null, event, false, 'plan');
+    expect(board.querySelector('#plan-title')?.textContent).toContain('План дня');
+    expect(board.querySelector('a[href^="https://t.me/test_bot"]')?.textContent).toContain(
+      'Подключить уведомления в Telegram',
+    );
+  });
 
   it('restores a previously selected participant for the same event', () => {
     window.localStorage.setItem('reglament-person:regatta', '@volunteer');
@@ -279,14 +319,21 @@ describe('EventBoard', () => {
     expect(board.querySelector('[role="alert"]')?.textContent).toContain('Не удалось');
   });
 
-  it('sends SOS for the selected role only and shows no shortcut in Team', () => {
-    const { board, fixture, change, requestSos } = render();
+  it('sends and cancels SOS for the selected role only and shows no shortcut in Team', () => {
+    const { board, fixture, change, requestSos, cancelSos } = render();
     expect(board.querySelector('.sos-button')).toBeNull();
     change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
     board.querySelector<HTMLButtonElement>('.role-head .sos-button')!.click();
     fixture.detectChanges();
     expect(requestSos).toHaveBeenCalledExactlyOnceWith('regatta', 'welcome', '@volunteer');
     expect(board.querySelector('.sos-feedback')?.textContent).toContain('отправлен');
+    const button = board.querySelector<HTMLButtonElement>('.role-head .sos-button')!;
+    expect(button.textContent?.trim()).toBe('Отменить SOS');
+    button.click();
+    fixture.detectChanges();
+    expect(cancelSos).toHaveBeenCalledExactlyOnceWith('regatta', 'welcome', '@volunteer');
+    expect(board.querySelector('.sos-feedback')?.textContent).toContain('отменён');
+    expect(button.textContent?.trim()).toBe('SOS');
 
     [...board.querySelectorAll<HTMLButtonElement>('.event-dock-tab')]
       .find((tab) => tab.textContent.includes('Команда'))!
@@ -294,6 +341,24 @@ describe('EventBoard', () => {
     fixture.detectChanges();
     expect(board.querySelector('.team-person a')?.textContent).toContain('@');
     expect(board.querySelector('.team-list button')).toBeNull();
+  });
+
+  it('restores active SOS from the server and returns to SOS when the request expires', () => {
+    vi.useFakeTimers();
+    const { board, fixture, change, sosStatus } = render();
+    try {
+      sosStatus.mockReturnValueOnce(of({ expiresAt: Date.now() + 5_000 }));
+      change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
+      const button = board.querySelector<HTMLButtonElement>('.role-head .sos-button')!;
+      expect(sosStatus).toHaveBeenCalledExactlyOnceWith('regatta', 'welcome', '@volunteer');
+      expect(button.textContent?.trim()).toBe('Отменить SOS');
+      vi.advanceTimersByTime(5_000);
+      fixture.detectChanges();
+      expect(button.textContent?.trim()).toBe('SOS');
+    } finally {
+      fixture.destroy();
+      vi.useRealTimers();
+    }
   });
 
   it.each([true, false])(
@@ -381,5 +446,20 @@ describe('EventBoard', () => {
       fixture.destroy();
       vi.useRealTimers();
     }
+  });
+
+  it('dismisses only the matching role and participant when live SOS is cancelled', () => {
+    const { board, fixture, sendSos, sendCancellation } = render(null, event, true);
+    const first = { roleId: 'welcome', roleTitle: 'Регистрация', assignee: '@volunteer' };
+    const second = { ...first, assignee: '@guide_one' };
+    sendSos(first);
+    sendSos(second);
+    fixture.detectChanges();
+    expect(board.querySelectorAll('.help-alert[data-kind="sos"]')).toHaveLength(2);
+    sendCancellation(first);
+    fixture.detectChanges();
+    const alerts = board.querySelectorAll('.help-alert[data-kind="sos"]');
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0].textContent).toContain('@guide_one');
   });
 });
