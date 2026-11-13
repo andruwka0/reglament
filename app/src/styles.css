@@ -167,7 +167,7 @@ textarea { min-height: 78px; resize: vertical; }
 .status-control select:focus-visible { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
 .status-control option { background-color: #fff; color: #281c34; text-decoration: none; }
 @media (max-width: 800px) {
-  .status-control { width: 108px; }
+  .status-control { width: 112px; }
   .status-control::before { inset-block: 11px; }
   .status-control::after { inset-inline-end: 7px; width: 4px; height: 4px; }
   .status-control select { padding-inline: 6px 15px; font-size: 11px; }
