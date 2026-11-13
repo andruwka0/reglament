@@ -226,19 +226,29 @@
               </svg>
             </span>
             <span class="mobile-person-choice">
-              <select
-                #mobilePerson
-                aria-label="Telegram"
-                (change)="choosePerson(mobilePerson.value)"
-              >
-                <option value="" [selected]="!personFilter()">Все участники</option>
-                @for (person of participants(); track person) {
-                  <option [value]="person" [selected]="person === personFilter()">
-                    {{ person }}
-                  </option>
-                }
-              </select>
-              <span>Telegram</span>
+              <span class="mobile-person-label">Участник в Telegram</span>
+              <span class="mobile-person-picker">
+                <select #mobilePerson (change)="choosePerson(mobilePerson.value)">
+                  <option value="" [selected]="!personFilter()">Все участники</option>
+                  @for (person of participants(); track person) {
+                    <option [value]="person" [selected]="person === personFilter()">
+                      {{ person }}
+                    </option>
+                  }
+                </select>
+                <svg
+                  class="mobile-person-chevron"
+                  viewBox="0 0 20 20"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m5 8 5 5 5-5" />
+                </svg>
+              </span>
             </span>
           </label>
         }
