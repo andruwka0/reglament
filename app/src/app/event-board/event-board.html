@@ -2,11 +2,10 @@
   @if (mobile()) {
     <h1 class="mobile-event-heading">
       <button
-        #eventTitle
         type="button"
         class="mobile-event-header"
-        aria-haspopup="dialog"
-        (click)="openSheet(sheet, eventTitle)"
+        aria-description="Открыть раздел «Важное»"
+        (click)="showImportant()"
       >
         <span class="mobile-event-icon" aria-hidden="true">
           @if (coverUrl(); as url) {
@@ -191,6 +190,25 @@
       </svg>
       <span>Команда</span>
     </button>
+    <button
+      type="button"
+      class="event-dock-tab"
+      [attr.aria-pressed]="page() === 'important'"
+      (click)="changePage('important')"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5m0-8h.01" />
+      </svg>
+      <span>Важное</span>
+    </button>
   </nav>
 
   <div class="event-grid">
@@ -336,7 +354,6 @@
             }
           </section>
         }
-
       </section>
     } @else if (page() === 'tasks') {
       <section class="event-primary" aria-label="Задачи мероприятия">
@@ -530,7 +547,7 @@
           }
         </section>
       }
-    } @else {
+    } @else if (page() === 'team') {
       <section class="event-team" aria-labelledby="team-title">
         <header class="plan-heading">
           <h2 id="team-title">Команда</h2>
@@ -560,12 +577,41 @@
           <p class="empty-state">Ответственные пока не назначены.</p>
         }
       </section>
+    } @else {
+      <section class="event-important" id="event-important" aria-labelledby="important-title">
+        <header class="plan-heading">
+          <h2 id="important-title" #importantHeading tabindex="-1">Важное</h2>
+        </header>
+        <div class="panel important-panel">
+          <ng-container [ngTemplateOutlet]="infoContent" />
+        </div>
+      </section>
     }
 
-    <aside class="event-aside">
-      @if (page() === 'tasks') {
-        <section class="panel" aria-labelledby="board-timing">
-          <h2 class="panel-title" id="board-timing">
+    @if (page() !== 'important') {
+      <aside class="event-aside">
+        @if (page() === 'tasks') {
+          <section class="panel" aria-labelledby="board-timing">
+            <h2 class="panel-title" id="board-timing">
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
+              Расписание
+            </h2>
+            <ng-container [ngTemplateOutlet]="scheduleContent" />
+          </section>
+        }
+        <section class="panel" aria-labelledby="board-info">
+          <h2 class="panel-title" id="board-info">
             <svg
               aria-hidden="true"
               viewBox="0 0 24 24"
@@ -576,48 +622,31 @@
               stroke-linejoin="round"
             >
               <circle cx="12" cy="12" r="9" />
-              <path d="M12 7v5l3 2" />
+              <path d="M12 11v5m0-8h.01" />
             </svg>
-            Расписание
+            Важное
           </h2>
-          <ng-container [ngTemplateOutlet]="scheduleContent" />
+          <ng-container [ngTemplateOutlet]="infoContent" />
         </section>
-      }
-      <section class="panel" aria-labelledby="board-info">
-        <h2 class="panel-title" id="board-info">
-          <svg
-            aria-hidden="true"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.7"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <circle cx="12" cy="12" r="9" />
-            <path d="M12 11v5m0-8h.01" />
-          </svg>
-          Важное
-        </h2>
-        <ng-container [ngTemplateOutlet]="infoContent" />
-      </section>
-    </aside>
+      </aside>
+    }
   </div>
 
   <dialog
-    #sheet
-    class="dialog event-sheet"
-    aria-labelledby="event-sheet-title"
-    (close)="closeSheet()"
-    (click)="$event.target === sheet && sheet.close()"
+    #taskDialog
+    class="dialog event-sheet task-sheet"
+    aria-labelledby="task-sheet-title"
+    (close)="closeTask()"
+    (click)="$event.target === taskDialog && taskDialog.close()"
   >
+    @let details = taskDetails();
     <header class="event-sheet-header">
-      <h2 id="event-sheet-title">Важное</h2>
+      <h2 id="task-sheet-title">{{ details?.task?.title || 'Задача' }}</h2>
       <button
         type="button"
         class="event-sheet-close icon-button"
         aria-label="Закрыть"
-        (click)="sheet.close()"
+        (click)="taskDialog.close()"
         autofocus
       >
         <svg
@@ -632,9 +661,31 @@
         </svg>
       </button>
     </header>
-    <div class="event-sheet-body">
-      <ng-container [ngTemplateOutlet]="infoContent" />
-    </div>
+    @if (details) {
+      <div class="event-sheet-body task-details">
+        <p class="task-detail-group">{{ details.group }}</p>
+        <div class="task-detail-meta">
+          @if (details.task.start || details.task.end) {
+            <span class="task-detail-time">{{
+              formatTime(details.task.start, details.task.end)
+            }}</span>
+          }
+          <span class="task-detail-status" [attr.data-status]="details.task.status">
+            {{ statusLabel(details.task.status) }}
+          </span>
+        </div>
+        @if (details.task.description) {
+          <p class="task-detail-description">{{ details.task.description }}</p>
+        }
+        @if (details.assignees.length) {
+          <div class="responsibles">
+            <ng-container
+              *ngTemplateOutlet="responsibles; context: { $implicit: details.assignees }"
+            />
+          </div>
+        }
+      </div>
+    }
   </dialog>
 
   <ng-template #personFilterControl>
@@ -737,7 +788,17 @@
       </button>
     }
     <div class="task-main">
-      <h3>{{ task.title }}</h3>
+      <h3>
+        <button
+          #taskTitle
+          class="task-open"
+          type="button"
+          aria-haspopup="dialog"
+          (click)="openTask(task, taskTitle)"
+        >
+          {{ task.title }}
+        </button>
+      </h3>
       @if (task.description) {
         <p>{{ task.description }}</p>
       }

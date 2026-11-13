@@ -1,13 +1,14 @@
 @if (checking()) {
   <p class="notice" role="status">Открываем кабинет…</p>
 } @else if (!authenticated()) {
-  <section class="panel login-panel">
-    <h1>Кабинет организатора</h1>
-    <p class="muted">Войдите, чтобы редактировать мероприятия и создавать шаблоны.</p>
+  <section class="panel login-panel" aria-labelledby="organizer-login-title">
+    <h1 id="organizer-login-title">{{ templatesView() ? 'Шаблоны' : 'Кабинет организатора' }}</h1>
+    <p class="muted">{{ templatesView() ? 'Введите пароль организатора, чтобы открыть шаблоны.' : 'Войдите, чтобы редактировать мероприятия и создавать шаблоны.' }}</p>
     <form (submit)="signIn($event)">
       <label class="field">Пароль
         <input type="password" autocomplete="current-password" [formField]="loginForm.value">
       </label>
+      @if (error(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
       <button type="submit" class="button primary" [disabled]="saving() || loginForm().invalid()">Войти</button>
     </form>
   </section>
@@ -177,7 +178,7 @@
     </div>
   }
 }
-@if (!visibleEditor()) {
+@if (authenticated() && !visibleEditor()) {
   @if (error(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
   @if (feedback(); as message) { <p class="notice" role="status" [textContent]="message"></p> }
 }

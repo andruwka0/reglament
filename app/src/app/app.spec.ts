@@ -3,7 +3,7 @@ import { provideRouter, Router } from '@angular/router';
 import { App } from './app';
 
 describe('App', () => {
-  it('opens the organizer cabinet from the navigation', async () => {
+  it('links to templates from the navigation', async () => {
     await TestBed.configureTestingModule({
       imports: [App],
       providers: [provideRouter([])],
@@ -11,13 +11,12 @@ describe('App', () => {
     const fixture = TestBed.createComponent(App);
     await fixture.whenStable();
     const app = fixture.nativeElement as HTMLElement;
-    const cabinet = [...app.querySelectorAll('a')].find(
-      (link) => link.textContent?.trim() === 'Кабинет',
-    );
-    expect(cabinet?.getAttribute('href')).toBe('/admin');
+    const links = [...app.querySelectorAll('.site-nav a')];
+    expect(links.map((link) => link.textContent?.trim())).toEqual(['Обзор', 'Шаблоны']);
+    expect(links[1].getAttribute('href')).toBe('/admin?view=templates');
   });
 
-  it('keeps share and organizer actions in the event menu', async () => {
+  it('keeps sharing and templates in the event menu', async () => {
     await TestBed.configureTestingModule({
       imports: [App],
       providers: [provideRouter([{ path: 'e/:id', children: [] }])],
@@ -31,7 +30,6 @@ describe('App', () => {
     expect(menu.querySelector('button')?.textContent).toContain('Поделиться');
     expect([...menu.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
       '/admin?view=templates',
-      '/admin',
     ]);
   });
 });

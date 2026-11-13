@@ -29,7 +29,7 @@ import { TrackerApi, errorMessage } from '../tracker-api';
 import { buildLivePlan, groupPlanTasks, type LiveState } from './live-plan';
 import { assignedPeople, buildPosts, COMMON_POST_ID, taskAssignedTo } from './post-view';
 
-type BoardPage = 'tasks' | 'plan' | 'team';
+type BoardPage = 'tasks' | 'plan' | 'team' | 'important';
 
 const planLabels = {
   past: 'Прошло',
@@ -60,8 +60,11 @@ export class EventBoard {
   private readonly destroyRef = inject(DestroyRef);
   private readonly injector = inject(Injector);
   private readonly carousel = viewChild<ElementRef<HTMLElement>>('postCarousel');
-  private readonly sheet = viewChild<ElementRef<HTMLDialogElement>>('sheet');
-  private sheetTrigger: HTMLButtonElement | null = null;
+  private readonly importantHeading = viewChild<ElementRef<HTMLHeadingElement>>('importantHeading');
+  private readonly taskDialog = viewChild<ElementRef<HTMLDialogElement>>('taskDialog');
+  private taskTrigger: HTMLButtonElement | null = null;
+  private taskOpening = false;
+  private readonly selectedTaskId = signal('');
   private postScrollTimer?: ReturnType<typeof setTimeout>;
   private readonly selectedPostId = signal('');
   protected readonly mobile = signal(window.matchMedia?.('(max-width: 800px)').matches ?? false);
@@ -134,6 +137,21 @@ export class EventBoard {
       },
     ];
   });
+  protected readonly taskDetails = computed(() => {
+    const id = this.selectedTaskId();
+    if (!id) return null;
+    for (const group of this.taskGroups()) {
+      const task = group.tasks.find((candidate) => candidate.id === id);
+      if (!task) continue;
+      const direct = this.people(task);
+      return {
+        task,
+        group: group.title,
+        assignees: direct.length ? direct : this.people(group),
+      };
+    }
+    return null;
+  });
   private readonly personGroups = computed(() => {
     const person = this.personFilter();
     const groups = this.taskGroups();
@@ -191,7 +209,9 @@ export class EventBoard {
         map((params) => params.get('id') ?? ''),
         distinctUntilChanged(),
         tap(() => {
-          this.sheet()?.nativeElement.close();
+          this.taskDialog()?.nativeElement.close();
+          this.taskOpening = false;
+          this.selectedTaskId.set('');
           this.event.set(null);
           this.loadingError.set('');
           this.saveError.set('');
@@ -231,6 +251,18 @@ export class EventBoard {
     this.refreshClock();
     if (page === 'tasks' && this.mobile()) this.alignPostAfterRender();
     window.scrollTo({ top: 0, behavior: 'instant' });
+  }
+
+  protected showImportant() {
+    if (this.page() === 'important') {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+      this.importantHeading()?.nativeElement.focus({ preventScroll: true });
+      return;
+    }
+    this.changePage('important');
+    afterNextRender(() => this.importantHeading()?.nativeElement.focus({ preventScroll: true }), {
+      injector: this.injector,
+    });
   }
 
   protected showPersonTasks(person: string) {
@@ -382,17 +414,30 @@ export class EventBoard {
     return 'https://t.me/' + assignee.slice(1);
   }
 
-  protected openSheet(dialog: HTMLDialogElement, trigger: HTMLButtonElement) {
-    this.sheetTrigger = trigger;
-    dialog.showModal();
+  protected openTask(task: Task, trigger: HTMLButtonElement) {
+    const dialog = this.taskDialog()?.nativeElement;
+    if (!dialog || dialog.open || this.taskOpening) return;
+    this.taskOpening = true;
+    this.taskTrigger = trigger;
+    this.selectedTaskId.set(task.id);
+    afterNextRender(
+      () => {
+        this.taskOpening = false;
+        if (dialog.isConnected && this.taskDetails()?.task.id === task.id && !dialog.open) {
+          dialog.showModal();
+        }
+      },
+      { injector: this.injector },
+    );
   }
 
-  protected closeSheet() {
-    if (this.sheet()?.nativeElement.open) return;
-    if (this.sheetTrigger?.getClientRects().length) {
-      this.sheetTrigger.focus({ preventScroll: true });
+  protected closeTask() {
+    if (this.taskOpening || this.taskDialog()?.nativeElement.open) return;
+    this.selectedTaskId.set('');
+    if (this.taskTrigger?.getClientRects().length) {
+      this.taskTrigger.focus({ preventScroll: true });
     }
-    this.sheetTrigger = null;
+    this.taskTrigger = null;
   }
 
   protected updateViewport() {
@@ -400,7 +445,6 @@ export class EventBoard {
     if (mobile === this.mobile()) return;
     this.mobile.set(mobile);
     if (mobile) this.alignPostAfterRender();
-    else this.sheet()?.nativeElement.close();
   }
 
   private finishUpdate(taskId: string, request: symbol): boolean {
@@ -432,6 +476,7 @@ export class EventBoard {
     this.event.set(
       current && !fromRefresh ? { ...next, coverVersion: current.coverVersion } : next,
     );
+    if (this.selectedTaskId() && !this.taskDetails()) this.taskDialog()?.nativeElement.close();
     if (!current) this.restorePerson(next);
     if (this.roleFilter() && !next.roles.some((role) => role.id === this.roleFilter())) {
       this.roleFilter.set('');

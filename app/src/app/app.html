@@ -68,21 +68,6 @@
             </svg>
             <span>Шаблоны</span>
           </a>
-          <a class="event-menu-option" routerLink="/admin" (click)="closeMenu()">
-            <svg
-              class="action-glyph"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linecap="round"
-              aria-hidden="true"
-            >
-              <circle cx="12" cy="8" r="3.2" />
-              <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" />
-            </svg>
-            <span>Кабинет</span>
-          </a>
         </div>
       </details>
     }
@@ -116,28 +101,6 @@
           <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
         </svg>
         <span class="nav-item-label">Шаблоны</span>
-      </a>
-      <a
-        class="nav-item nav-item-compact"
-        aria-label="Кабинет"
-        title="Кабинет"
-        [attr.aria-current]="!eventPath() && !templates() ? 'page' : null"
-        routerLink="/admin"
-      >
-        <svg
-          class="nav-item-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <circle cx="12" cy="8" r="3.2" />
-          <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" />
-        </svg>
-        <span class="nav-item-label">Кабинет</span>
       </a>
     </nav>
     @if (eventPath()) {
