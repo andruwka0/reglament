@@ -1287,16 +1287,6 @@ summary.plan-summary::after {
   }
   .post-tasks-heading { padding: 11px 12px 8px; }
   .post-description { padding: 0 12px 9px; color: var(--muted); font-size: 13px; white-space: pre-line; overflow-wrap: anywhere; }
-  .post-completed { border-top: 1px solid var(--line); }
-  .post-completed > summary {
-    min-height: 44px;
-    align-content: center;
-    padding: 5px 12px;
-    color: var(--muted);
-    cursor: pointer;
-    font-size: 13px;
-    font-weight: 720;
-  }
   .post-empty { padding: 11px 12px; color: var(--muted); font-size: 13px; }
 
 }
@@ -1468,8 +1458,6 @@ summary.plan-summary::after {
     border-radius: 13px;
     background: color-mix(in srgb, var(--blue-wash) 66%, var(--paper));
   }
-  .post-completed { border-top-color: var(--line); }
-  .post-completed > summary { color: var(--muted); }
   .event-dock {
     border-color: var(--post-glass-edge);
     border-radius: 29px;

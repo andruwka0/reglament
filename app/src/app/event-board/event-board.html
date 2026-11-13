@@ -326,28 +326,16 @@
             @if (post.description) {
               <p class="post-description">{{ post.description }}</p>
             }
-            @if (openPostTasks().length) {
+            @if (post.tasks.length) {
               <ul class="task-list">
-                @for (task of openPostTasks(); track task.id) {
+                @for (task of post.tasks; track task.id) {
                   <ng-container
                     *ngTemplateOutlet="taskRow; context: { $implicit: task, quick: true }"
                   />
                 }
               </ul>
-            } @else if (!post.tasks.length) {
+            } @else {
               <p class="post-empty">У этого поста пока нет задач.</p>
-            }
-            @if (completedPostTasks().length) {
-              <details class="post-completed" [attr.data-post-id]="post.id">
-                <summary>Выполнено · {{ completedPostTasks().length }}</summary>
-                <ul class="task-list">
-                  @for (task of completedPostTasks(); track task.id) {
-                    <ng-container
-                      *ngTemplateOutlet="taskRow; context: { $implicit: task, quick: true }"
-                    />
-                  }
-                </ul>
-              </details>
             }
           </section>
         }

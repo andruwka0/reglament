@@ -98,12 +98,6 @@ export class EventBoard {
   protected readonly activePost = computed(
     () => this.posts().find((post) => post.id === this.selectedPostId()) ?? this.posts()[0],
   );
-  protected readonly openPostTasks = computed(
-    () => this.activePost()?.tasks.filter((task) => task.status !== 'done') ?? [],
-  );
-  protected readonly completedPostTasks = computed(
-    () => this.activePost()?.tasks.filter((task) => task.status === 'done') ?? [],
-  );
   private readonly tasks = computed(() => {
     const event = this.event();
     return event ? [...event.tasks, ...event.roles.flatMap((role) => role.tasks)] : [];
