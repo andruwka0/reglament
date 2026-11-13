@@ -283,7 +283,7 @@ describe('EventBoard', () => {
     const { board, fixture, change, requestSos } = render();
     expect(board.querySelector('.sos-button')).toBeNull();
     change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
-    board.querySelector<HTMLButtonElement>('.sos-button')!.click();
+    board.querySelector<HTMLButtonElement>('.role-head .sos-button')!.click();
     fixture.detectChanges();
     expect(requestSos).toHaveBeenCalledExactlyOnceWith('regatta', 'welcome', '@volunteer');
     expect(board.querySelector('.sos-feedback')?.textContent).toContain('отправлен');

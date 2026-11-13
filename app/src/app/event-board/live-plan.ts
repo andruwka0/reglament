@@ -97,9 +97,8 @@ export function buildLivePlan(event: Pick<Event, 'date' | 'timeline'>, now: Date
 export function groupPlanTasks(
   schedule: readonly LiveScheduleItem[],
   tasks: readonly Task[],
-): { byItem: Map<string, Task[]>; outside: Task[] } {
+): Map<string, Task[]> {
   const byItem = new Map<string, Task[]>();
-  const outside: Task[] = [];
   const slots = schedule.map((entry) => {
     const start = minutes(entry.start);
     const end = minutes(entry.effectiveEnd);
@@ -113,10 +112,7 @@ export function groupPlanTasks(
   for (const task of tasks) {
     const start = minutes(task.start);
     const time = start ?? minutes(task.end);
-    if (time === null) {
-      outside.push(task);
-      continue;
-    }
+    if (time === null) continue;
 
     let range: { id: string; start: number } | undefined;
     let point: (typeof slots)[number] | undefined;
@@ -138,9 +134,7 @@ export function groupPlanTasks(
       const group = byItem.get(match.id) ?? [];
       group.push(task);
       byItem.set(match.id, group);
-    } else {
-      outside.push(task);
     }
   }
-  return { byItem, outside };
+  return byItem;
 }

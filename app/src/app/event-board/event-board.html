@@ -275,6 +275,9 @@
               </span>
             </span>
           </label>
+          @if (!personFilter()) {
+            <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи и отправлять SOS.</p>
+          }
         }
         <div>
           <header class="post-heading">
@@ -352,7 +355,9 @@
             <header class="post-tasks-heading">
               <h2 id="post-tasks-title">Задачи поста</h2>
               <span class="sr-only">{{ post.title }}</span>
+              <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: post.id }" />
             </header>
+            <ng-container *ngTemplateOutlet="sosResult; context: { $implicit: post.id }" />
             @if (post.description) {
               <p class="post-description">{{ post.description }}</p>
             }
@@ -367,7 +372,6 @@
             } @else {
               <p class="post-empty">У этого поста пока нет задач.</p>
             }
-            <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: post.id }" />
           </section>
         }
       </section>
@@ -418,7 +422,7 @@
         </div>
 
         @if (participants().length && !personFilter()) {
-          <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи.</p>
+          <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи и отправлять SOS.</p>
         }
 
         @if (loadingError() || saveError()) {
@@ -446,7 +450,9 @@
                   </div>
                 }
               </div>
+              <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: role.id }" />
             </div>
+            <ng-container *ngTemplateOutlet="sosResult; context: { $implicit: role.id }" />
             <ul class="task-list">
               @for (task of role.tasks; track task.id) {
                 <ng-container *ngTemplateOutlet="taskRow; context: { $implicit: task }" />
@@ -454,7 +460,6 @@
                 <li class="task-row muted">Задач пока нет.</li>
               }
             </ul>
-            <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: role.id }" />
           </section>
         } @empty {
           @if (personFilter()) {
@@ -502,7 +507,7 @@
           @if (plan.schedule.length) {
             <ol class="plan-list">
               @for (item of plan.schedule; track item.id) {
-                @let related = planTasks().byItem.get(item.id) ?? [];
+                @let related = planTasks().get(item.id) ?? [];
                 <li
                   class="plan-item"
                   [attr.data-state]="item.state"
@@ -565,20 +570,6 @@
             </ol>
           } @else {
             <p class="empty-state">Расписание пока не добавлено.</p>
-          }
-
-          @if (planTasks().outside.length) {
-            <section class="panel plan-unassigned" aria-labelledby="plan-outside-title">
-              <h3 id="plan-outside-title">Задачи вне этапов</h3>
-              <ul class="plan-related">
-                @for (task of planTasks().outside; track task.id) {
-                  <ng-container
-                    [ngTemplateOutlet]="taskRow"
-                    [ngTemplateOutletContext]="{ $implicit: task }"
-                  />
-                }
-              </ul>
-            </section>
           }
         </section>
       }
@@ -797,23 +788,25 @@
 
 <ng-template #sosControl let-roleId>
   @if (ownRoleIds().has(roleId)) {
-    @let key = sosKey(roleId);
-    <div class="post-sos">
-      <button
-        class="button sos-button"
-        type="button"
-        [disabled]="sosPending().has(key)"
-        aria-label="SOS: запросить помощь"
-        (click)="requestSos(roleId)"
-      >
-        SOS
-      </button>
-      @if (sosFeedback().get(key); as feedback) {
-        <p class="sos-feedback" [attr.data-error]="feedback.error" role="status">
-          {{ feedback.text }}
-        </p>
-      }
-    </div>
+    <button
+      class="button sos-button"
+      type="button"
+      [disabled]="sosPending().has(sosKey(roleId))"
+      aria-label="SOS: запросить помощь"
+      (click)="requestSos(roleId)"
+    >
+      SOS
+    </button>
+  }
+</ng-template>
+
+<ng-template #sosResult let-roleId>
+  @if (ownRoleIds().has(roleId)) {
+    @if (sosFeedback().get(sosKey(roleId)); as feedback) {
+      <p class="sos-feedback" [attr.data-error]="feedback.error" role="status">
+        {{ feedback.text }}
+      </p>
+    }
   }
 </ng-template>
 

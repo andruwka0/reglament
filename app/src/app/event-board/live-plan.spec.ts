@@ -120,19 +120,13 @@ describe('groupPlanTasks', () => {
       task('not-a-next-day-task', '00:30'),
       task('midnight-deadline', '', '00:00'),
     ];
-    const { byItem, outside } = groupPlanTasks(plan.schedule, tasks);
+    const byItem = groupPlanTasks(plan.schedule, tasks);
     expect([...byItem].map(([id, tasks]) => [id, tasks.map((task) => task.id)])).toEqual([
       ['registration', ['starts-at-boundary']],
       ['opening', ['deadline-at-boundary']],
       ['overlap', ['latest-matching-range']],
       ['point', ['point-matches']],
       ['overnight', ['before-midnight']],
-    ]);
-    expect(outside.map((task) => task.id)).toEqual([
-      'no-time',
-      'gap',
-      'not-a-next-day-task',
-      'midnight-deadline',
     ]);
   });
 });
