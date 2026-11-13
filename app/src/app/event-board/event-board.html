@@ -1,0 +1,845 @@
+@if (event(); as board) {
+  @if (mobile()) {
+    <h1 class="mobile-event-heading">
+      <button
+        #eventTitle
+        type="button"
+        class="mobile-event-header"
+        aria-haspopup="dialog"
+        (click)="openSheet(sheet, eventTitle)"
+      >
+        <span class="mobile-event-icon" aria-hidden="true">
+          @if (coverUrl(); as url) {
+            <img class="mobile-event-cover" [src]="url" alt="" />
+          } @else {
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.65"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path
+                d="M11 2.8C10.8 7.2 8.9 11.2 4.2 15h7.1L11 2.8Z"
+                fill="#269c91"
+                stroke="#168176"
+              />
+              <path
+                d="M14 4.2c3.2 3.4 4.8 7 5.2 11.5l-5.5-1.2.3-10.3Z"
+                fill="#59cbb9"
+                stroke="#269c91"
+              />
+              <path
+                d="M3 18c3 .8 4.8 1 7.9 0 3.1-.9 5 .8 10.1 0-2 3.2-5 4.1-8.7 3.4-4.3-.9-5.9.4-9.3-3.4Z"
+                fill="#1886eb"
+                stroke="#1886eb"
+              />
+            </svg>
+          }
+        </span>
+        <span class="mobile-event-text">
+          <span class="mobile-event-title">{{ board.title }}</span>
+          <span class="mobile-event-date">
+            @if (board.date) {
+              <time [attr.datetime]="board.date">{{ formatDate(board.date) }}</time>
+            } @else {
+              Дата уточняется
+            }
+            @if (board.location) {
+              · {{ board.location }}
+            }
+          </span>
+        </span>
+        <svg
+          class="mobile-event-chevron"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m9 5 7 7-7 7" />
+        </svg>
+      </button>
+    </h1>
+  } @else {
+    <header class="event-hero" [class.has-cover]="!!coverUrl()">
+      @if (coverUrl(); as url) {
+        <img class="event-cover" [src]="url" alt="" fetchpriority="high" />
+      }
+      <div class="hero-copy">
+        @if (board.date || board.location) {
+          <div class="event-meta">
+            @if (board.date) {
+              <div class="event-meta-item">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="3" y="5" width="18" height="16" rx="2" />
+                  <path d="M7 3v4m10-4v4M3 10h18" />
+                </svg>
+                <time [attr.datetime]="board.date">{{ formatDate(board.date) }}</time>
+              </div>
+            }
+            @if (board.location) {
+              <div class="event-meta-item">
+                <svg
+                  aria-hidden="true"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <path d="M20 10c0 5-8 11-8 11S4 15 4 10a8 8 0 1 1 16 0Z" />
+                  <circle cx="12" cy="10" r="2.5" />
+                </svg>
+                <span>{{ board.location }}</span>
+              </div>
+            }
+          </div>
+        }
+        <h1>{{ board.title }}</h1>
+      </div>
+      @if (total()) {
+        <div class="hero-progress">
+          <span id="board-progress">{{ done() }} из {{ total() }} задач готово</span>
+          <div
+            class="progress-track"
+            role="progressbar"
+            aria-labelledby="board-progress"
+            [attr.aria-valuemin]="0"
+            [attr.aria-valuemax]="total()"
+            [attr.aria-valuenow]="done()"
+          >
+            <div class="progress-fill" [style.width.%]="progress()"></div>
+          </div>
+        </div>
+      }
+    </header>
+  }
+
+  <nav class="event-dock" aria-label="Основные разделы мероприятия">
+    <button
+      type="button"
+      class="event-dock-tab"
+      [attr.aria-pressed]="page() === 'tasks'"
+      (click)="changePage('tasks')"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        aria-hidden="true"
+      >
+        <rect x="3.5" y="3.5" width="17" height="17" rx="4" />
+        <path d="m8 12 2.6 2.6L16 9" />
+      </svg>
+      <span>Задачи</span>
+    </button>
+    <button
+      type="button"
+      class="event-dock-tab"
+      [attr.aria-pressed]="page() === 'plan'"
+      (click)="changePage('plan')"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <rect x="3" y="5" width="18" height="16" rx="3" />
+        <path d="M7 3v4m10-4v4M3 10h18M8 15h.01m4 0h.01m4 0h.01M8 18h.01m4 0h.01" />
+      </svg>
+      <span>План</span>
+    </button>
+    <button
+      type="button"
+      class="event-dock-tab"
+      [attr.aria-pressed]="page() === 'team'"
+      (click)="changePage('team')"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.75"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+        aria-hidden="true"
+      >
+        <circle cx="9" cy="8" r="3" />
+        <path
+          d="M3 20v-2a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v2H3Zm13-15a3 3 0 0 1 0 6m2 3a4 4 0 0 1 3 4v2h-3"
+        />
+      </svg>
+      <span>Команда</span>
+    </button>
+  </nav>
+
+  <div class="event-grid">
+    @if (page() === 'tasks' && mobile()) {
+      <section class="mobile-posts" aria-label="Посты и задачи">
+        @if (participants().length) {
+          <label class="mobile-person">
+            <span class="mobile-person-icon" aria-hidden="true">
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+              >
+                <circle cx="12" cy="8" r="3.2" />
+                <path d="M5 20v-1a5 5 0 0 1 5-5h4a5 5 0 0 1 5 5v1" />
+              </svg>
+            </span>
+            <span class="mobile-person-choice">
+              <select
+                #mobilePerson
+                aria-label="Telegram"
+                (change)="choosePerson(mobilePerson.value)"
+              >
+                <option value="" [selected]="!personFilter()">Все участники</option>
+                @for (person of participants(); track person) {
+                  <option [value]="person" [selected]="person === personFilter()">
+                    {{ person }}
+                  </option>
+                }
+              </select>
+              <span>Telegram</span>
+            </span>
+          </label>
+        }
+        <div>
+          <header class="post-heading">
+            <h2>{{ personFilter() ? 'Мой пост' : 'Посты команды' }}</h2>
+          </header>
+          @if (posts().length) {
+            <div
+              #postCarousel
+              class="post-carousel"
+              role="group"
+              aria-label="Посты"
+              (scroll)="postScrolled()"
+            >
+              @for (post of posts(); track post.id) {
+                <button
+                  type="button"
+                  class="post-card"
+                  [attr.data-post-id]="post.id"
+                  [attr.aria-label]="post.title"
+                  [attr.aria-pressed]="activePost()?.id === post.id"
+                  (click)="choosePost(post.id)"
+                >
+                  <span class="post-card-icon" aria-hidden="true">
+                    <svg
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.7"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      @if (post.title.toLowerCase().includes('навигац')) {
+                        <path d="m20 4-5.4 15-3.4-6.2L5 9.4 20 4Z" />
+                        <path d="m11.2 12.8 3.5-3.5" />
+                      } @else if (post.title.toLowerCase().includes('гардероб')) {
+                        <path
+                          d="M10 7a2 2 0 1 1 3.4 1.4L12 10l-8.2 5.4A1.4 1.4 0 0 0 4.6 18h14.8a1.4 1.4 0 0 0 .8-2.6L12 10"
+                        />
+                      } @else {
+                        <rect x="5" y="4.5" width="14" height="16" rx="3" />
+                        <path d="M9 4.5V3h6v1.5M9 10h6m-6 4h6" />
+                      }
+                    </svg>
+                  </span>
+                  <span class="post-card-main">
+                    <span class="post-card-title-row">
+                      <span class="post-card-name">{{ post.title }}</span>
+                      @if (personFilter() && activePost()?.id === post.id) {
+                        <span class="post-card-label">Ваш пост</span>
+                      }
+                    </span>
+                    @let state = postStatus(post.tasks);
+                    <span class="post-card-status" [attr.data-status]="state">{{
+                      statusLabel(state)
+                    }}</span>
+                    <span class="post-card-progress-row">
+                      <span class="post-card-progress" aria-hidden="true">
+                        <span
+                          [style.width.%]="post.total ? (100 * post.done) / post.total : 0"
+                        ></span>
+                      </span>
+                      <span class="post-card-count">{{ post.done }} из {{ post.total }}</span>
+                    </span>
+                  </span>
+                </button>
+              }
+            </div>
+          } @else {
+            <p class="empty-state">Посты пока не назначены.</p>
+          }
+        </div>
+
+        @if (loadingError() || saveError()) {
+          <p class="notice error" role="alert">{{ saveError() || loadingError() }}</p>
+        }
+
+        @if (activePost(); as post) {
+          <section class="post-tasks" aria-labelledby="post-tasks-title">
+            <header class="post-tasks-heading">
+              <h2 id="post-tasks-title">Задачи поста</h2>
+              <span class="sr-only">{{ post.title }}</span>
+            </header>
+            @if (post.description) {
+              <p class="post-description">{{ post.description }}</p>
+            }
+            @if (openPostTasks().length) {
+              <ul class="task-list">
+                @for (task of openPostTasks(); track task.id) {
+                  <ng-container
+                    *ngTemplateOutlet="taskRow; context: { $implicit: task, quick: true }"
+                  />
+                }
+              </ul>
+            } @else if (!post.tasks.length) {
+              <p class="post-empty">У этого поста пока нет задач.</p>
+            }
+            @if (completedPostTasks().length) {
+              <details class="post-completed" [attr.data-post-id]="post.id">
+                <summary>Выполнено · {{ completedPostTasks().length }}</summary>
+                <ul class="task-list">
+                  @for (task of completedPostTasks(); track task.id) {
+                    <ng-container
+                      *ngTemplateOutlet="taskRow; context: { $implicit: task, quick: true }"
+                    />
+                  }
+                </ul>
+              </details>
+            }
+          </section>
+        }
+
+        @if (coordinator(); as contact) {
+          @if (infoLink(contact.value); as link) {
+            <a
+              class="post-coordinator"
+              [href]="link"
+              target="_blank"
+              rel="noopener noreferrer"
+              [attr.aria-label]="contact.label + ' ' + contact.value"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path
+                  d="M4.5 4.5 8 4l2 4-2 1.5a14 14 0 0 0 6.5 6.5l1.5-2 4 2-.5 3.5A2 2 0 0 1 17.5 21 16 16 0 0 1 3 6.5 2 2 0 0 1 4.5 4.5Z"
+                />
+              </svg>
+              <strong>{{ contact.label }}</strong>
+              <svg
+                class="post-coordinator-chevron"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="m9 5 7 7-7 7" />
+              </svg>
+            </a>
+          } @else {
+            <div class="post-coordinator">
+              <strong>{{ contact.label }}</strong
+              ><span>{{ contact.value }}</span>
+            </div>
+          }
+        }
+      </section>
+    } @else if (page() === 'tasks') {
+      <section class="event-primary" aria-label="Задачи мероприятия">
+        <div class="board-controls">
+          <nav class="tabs" aria-label="Разделы мероприятия">
+            <button
+              class="tab"
+              type="button"
+              [class.active]="!personFilter() && tab() === 'roles'"
+              [attr.aria-pressed]="!personFilter() && tab() === 'roles'"
+              [disabled]="!!personFilter()"
+              (click)="tab.set('roles')"
+            >
+              Роли
+            </button>
+            <button
+              class="tab"
+              type="button"
+              [class.active]="!personFilter() && tab() === 'common'"
+              [attr.aria-pressed]="!personFilter() && tab() === 'common'"
+              [disabled]="!!personFilter()"
+              aria-label="Общие задачи"
+              (click)="tab.set('common')"
+            >
+              Общие
+            </button>
+          </nav>
+          <div class="board-filters">
+            @if (participants().length) {
+              <ng-container [ngTemplateOutlet]="personFilterControl" />
+            }
+            @if (!personFilter() && tab() === 'roles' && board.roles.length > 1) {
+              <label class="role-filter">
+                <span>Показать роли</span>
+                <select #roleSelect (change)="roleFilter.set(roleSelect.value)">
+                  <option value="" [selected]="!roleFilter()">Все роли</option>
+                  @for (role of board.roles; track role.id) {
+                    <option [value]="role.id" [selected]="role.id === roleFilter()">
+                      {{ role.title }}
+                    </option>
+                  }
+                </select>
+              </label>
+            }
+          </div>
+        </div>
+
+        @if (loadingError() || saveError()) {
+          <p class="notice error" role="alert">{{ saveError() || loadingError() }}</p>
+        }
+
+        @for (role of groups(); track role.id) {
+          <section class="role-card">
+            <div class="role-head">
+              <span class="role-icon" aria-hidden="true">{{
+                role.title.charAt(0).toUpperCase()
+              }}</span>
+              <div class="role-meta">
+                <div class="role-title">
+                  <h2>{{ role.title }}</h2>
+                  @if (role.description) {
+                    <p>{{ role.description }}</p>
+                  }
+                </div>
+                @if (people(role).length) {
+                  <div class="responsibles">
+                    <ng-container
+                      *ngTemplateOutlet="responsibles; context: { $implicit: people(role) }"
+                    />
+                  </div>
+                }
+              </div>
+            </div>
+            <ul class="task-list">
+              @for (task of role.tasks; track task.id) {
+                <ng-container *ngTemplateOutlet="taskRow; context: { $implicit: task }" />
+              } @empty {
+                <li class="task-row muted">Задач пока нет.</li>
+              }
+            </ul>
+          </section>
+        } @empty {
+          @if (personFilter()) {
+            <div class="empty-state">
+              <p>У {{ personFilter() }} нет задач.</p>
+              <button class="button" type="button" (click)="resetTaskFilters()">
+                Показать все задачи
+              </button>
+            </div>
+          } @else {
+            <p class="empty-state">Роли пока не добавлены.</p>
+          }
+        }
+      </section>
+    } @else if (page() === 'plan') {
+      @if (livePlan(); as plan) {
+        <section class="event-plan" aria-labelledby="plan-title">
+          <header class="plan-heading">
+            <div>
+              <h2 id="plan-title">План дня</h2>
+              <p>
+                {{ planDayLabels[plan.relativeDay] }}
+                @if (board.date) {
+                  · {{ formatDate(board.date) }}
+                }
+              </p>
+            </div>
+            <div class="plan-actions">
+              <time class="plan-clock" [attr.datetime]="plan.date + 'T' + plan.time + ':00+03:00'"
+                >{{ plan.time }} мск</time
+              >
+            </div>
+          </header>
+
+          @if (participants().length) {
+            <div class="board-filters plan-filter">
+              <ng-container [ngTemplateOutlet]="personFilterControl" />
+            </div>
+          }
+
+          @if (loadingError() || saveError()) {
+            <p class="notice error" role="alert">{{ saveError() || loadingError() }}</p>
+          }
+
+          @if (plan.schedule.length) {
+            <ol class="plan-list">
+              @for (item of plan.schedule; track item.id) {
+                @let related = planTasks().byItem.get(item.id) ?? [];
+                <li
+                  class="plan-item"
+                  [attr.data-state]="item.state"
+                  [attr.aria-current]="item.state === 'current' ? 'step' : null"
+                >
+                  <span class="plan-time">{{
+                    item.start || item.end
+                      ? formatPlanTime(item.start, item.end, item.effectiveEnd === item.start)
+                      : 'Без времени'
+                  }}</span>
+                  <span class="plan-dot" aria-hidden="true"></span>
+                  @if (item.description || related.length) {
+                    <details class="plan-card" [open]="item.state === 'current'">
+                      <summary class="plan-summary">
+                        <ng-container
+                          [ngTemplateOutlet]="planSummary"
+                          [ngTemplateOutletContext]="{ $implicit: item }"
+                        />
+                      </summary>
+                      @if (item.description) {
+                        <p class="plan-description">{{ item.description }}</p>
+                      }
+                      @if (related.length) {
+                        <ul class="plan-related">
+                          @for (task of related; track task.id) {
+                            <ng-container
+                              [ngTemplateOutlet]="taskRow"
+                              [ngTemplateOutletContext]="{ $implicit: task }"
+                            />
+                          }
+                        </ul>
+                      }
+                    </details>
+                  } @else {
+                    <div class="plan-card">
+                      <div class="plan-summary">
+                        <ng-container
+                          [ngTemplateOutlet]="planSummary"
+                          [ngTemplateOutletContext]="{ $implicit: item }"
+                        />
+                      </div>
+                    </div>
+                  }
+                </li>
+              }
+            </ol>
+          } @else {
+            <p class="empty-state">Расписание пока не добавлено.</p>
+          }
+
+          @if (planTasks().outside.length) {
+            <section class="panel plan-unassigned" aria-labelledby="plan-outside-title">
+              <h3 id="plan-outside-title">Задачи вне этапов</h3>
+              <ul class="plan-related">
+                @for (task of planTasks().outside; track task.id) {
+                  <ng-container
+                    [ngTemplateOutlet]="taskRow"
+                    [ngTemplateOutletContext]="{ $implicit: task }"
+                  />
+                }
+              </ul>
+            </section>
+          }
+        </section>
+      }
+    } @else {
+      <section class="event-team" aria-labelledby="team-title">
+        <header class="plan-heading">
+          <h2 id="team-title">Команда</h2>
+        </header>
+        @if (team().length) {
+          <ul class="team-list">
+            @for (member of team(); track member.person) {
+              <li class="team-person">
+                <div class="team-meta">
+                  <a [href]="telegram(member.person)" target="_blank" rel="noopener noreferrer">{{
+                    member.person
+                  }}</a>
+                  <p>{{ member.roles.join(', ') }}</p>
+                </div>
+                <button
+                  type="button"
+                  class="button secondary"
+                  [attr.aria-label]="'Задачи ' + member.person"
+                  (click)="showPersonTasks(member.person)"
+                >
+                  Задачи
+                </button>
+              </li>
+            }
+          </ul>
+        } @else {
+          <p class="empty-state">Ответственные пока не назначены.</p>
+        }
+      </section>
+    }
+
+    <aside class="event-aside">
+      @if (page() === 'tasks') {
+        <section class="panel" aria-labelledby="board-timing">
+          <h2 class="panel-title" id="board-timing">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 7v5l3 2" />
+            </svg>
+            Расписание
+          </h2>
+          <ng-container [ngTemplateOutlet]="scheduleContent" />
+        </section>
+      }
+      <section class="panel" aria-labelledby="board-info">
+        <h2 class="panel-title" id="board-info">
+          <svg
+            aria-hidden="true"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 11v5m0-8h.01" />
+          </svg>
+          Важное
+        </h2>
+        <ng-container [ngTemplateOutlet]="infoContent" />
+      </section>
+    </aside>
+  </div>
+
+  <dialog
+    #sheet
+    class="dialog event-sheet"
+    aria-labelledby="event-sheet-title"
+    (close)="closeSheet()"
+    (click)="$event.target === sheet && sheet.close()"
+  >
+    <header class="event-sheet-header">
+      <h2 id="event-sheet-title">Важное</h2>
+      <button
+        type="button"
+        class="event-sheet-close icon-button"
+        aria-label="Закрыть"
+        (click)="sheet.close()"
+        autofocus
+      >
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.8"
+          stroke-linecap="round"
+          aria-hidden="true"
+        >
+          <path d="m6 6 12 12M18 6 6 18" />
+        </svg>
+      </button>
+    </header>
+    <div class="event-sheet-body">
+      <ng-container [ngTemplateOutlet]="infoContent" />
+    </div>
+  </dialog>
+
+  <ng-template #personFilterControl>
+    <label class="person-filter">
+      <span>Telegram</span>
+      <select #personSelect (change)="choosePerson(personSelect.value)">
+        <option value="" [selected]="!personFilter()">Все участники</option>
+        @for (person of participants(); track person) {
+          <option [value]="person" [selected]="person === personFilter()">
+            {{ person }}
+          </option>
+        }
+      </select>
+    </label>
+  </ng-template>
+
+  <ng-template #planSummary let-item>
+    <span class="plan-title">{{ item.title }}</span>
+    @if (item.state !== 'untimed') {
+      <span class="plan-state">{{ planLabel(item.state) }}</span>
+    }
+  </ng-template>
+
+  <ng-template #scheduleContent>
+    @if (board.timeline.length) {
+      <ol class="timeline">
+        @for (item of board.timeline; track item.id) {
+          <li class="timeline-item">
+            @if (item.start || item.end) {
+              <span class="timeline-time">{{ formatTime(item.start, item.end) }}</span>
+            }
+            <h3>{{ item.title }}</h3>
+            @if (item.description) {
+              <p>{{ item.description }}</p>
+            }
+          </li>
+        }
+      </ol>
+    } @else {
+      <p class="muted">Расписание пока не добавлено.</p>
+    }
+  </ng-template>
+
+  <ng-template #infoContent>
+    @if (board.description) {
+      <p class="event-intro">{{ board.description }}</p>
+    }
+    @if (board.info.length) {
+      <dl class="info-list">
+        @for (item of board.info; track item.id) {
+          <div>
+            <dt>{{ item.label }}</dt>
+            <dd>
+              @if (infoLink(item.value); as link) {
+                <a [href]="link" target="_blank" rel="noopener noreferrer">{{ item.value }}</a>
+              } @else {
+                {{ item.value || 'Уточнить у организатора' }}
+              }
+            </dd>
+          </div>
+        }
+      </dl>
+    } @else if (!board.description) {
+      <p class="muted">Важная информация пока не добавлена.</p>
+    }
+  </ng-template>
+} @else if (loadingError()) {
+  <p class="notice error" role="alert">{{ loadingError() }}</p>
+} @else {
+  <p class="notice" role="status">Загружаем мероприятие…</p>
+}
+
+<ng-template #taskRow let-task let-quick="quick">
+  <li class="task-row" [class.task-row-quick]="quick" [attr.data-task-status]="task.status">
+    @if (quick) {
+      <button
+        type="button"
+        class="task-check"
+        [attr.aria-pressed]="task.status === 'done'"
+        [attr.aria-label]="
+          (task.status === 'done' ? 'Вернуть в работу: ' : 'Отметить выполненной: ') + task.title
+        "
+        [disabled]="pending().has(task.id)"
+        (click)="toggleTaskDone(task)"
+      >
+        <span class="task-check-box" aria-hidden="true">
+          @if (task.status === 'done') {
+            <svg
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m4 10 4 4 8-8" />
+            </svg>
+          }
+        </span>
+      </button>
+    }
+    <div class="task-main">
+      <h3>{{ task.title }}</h3>
+      @if (task.description) {
+        <p>{{ task.description }}</p>
+      }
+    </div>
+    <div class="task-side">
+      @if (task.start || task.end) {
+        <span class="task-time">{{ formatTime(task.start, task.end) }}</span>
+      }
+      <div class="status-control" [attr.data-status]="task.status">
+        <select
+          class="status"
+          [attr.data-status]="task.status"
+          [attr.aria-label]="'Статус задачи «' + task.title + '»'"
+          [disabled]="pending().has(task.id)"
+          #statusControl
+          (change)="updateTask(task, statusControl)"
+        >
+          @for (option of statuses; track option.id) {
+            <option [value]="option.id" [selected]="option.id === task.status">
+              {{ option.label }}
+            </option>
+          }
+        </select>
+      </div>
+    </div>
+    @if (people(task).length && (!quick || !personFilter() || people(task).length > 1)) {
+      <div class="responsibles task-responsibles">
+        <ng-container *ngTemplateOutlet="responsibles; context: { $implicit: people(task) }" />
+      </div>
+    }
+  </li>
+</ng-template>
+
+<ng-template #responsibles let-handles>
+  <span class="responsibles-label">Ответственные</span>
+  <div class="responsibles-list">
+    @for (handle of handles.slice(0, 2); track handle) {
+      <ng-container *ngTemplateOutlet="telegramLink; context: { $implicit: handle }" />
+    }
+  </div>
+  @if (handles.length > 2) {
+    <details class="responsibles-more">
+      <summary>Ещё {{ handles.length - 2 }}</summary>
+      <div class="responsibles-list">
+        @for (handle of handles.slice(2); track handle) {
+          <ng-container *ngTemplateOutlet="telegramLink; context: { $implicit: handle }" />
+        }
+      </div>
+    </details>
+  }
+</ng-template>
+
+<ng-template #telegramLink let-handle>
+  <a
+    class="assignee"
+    [href]="telegram(handle)"
+    target="_blank"
+    rel="noopener noreferrer"
+    [attr.aria-label]="handle + ' в Telegram'"
+    >{{ handle }}</a
+  >
+</ng-template>

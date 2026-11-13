@@ -1,0 +1,445 @@
+import { NgTemplateOutlet } from '@angular/common';
+import { Component, computed, inject, signal, viewChild, ElementRef } from '@angular/core';
+import { FormField, form, readonly, required } from '@angular/forms/signals';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
+import { toSignal } from '@angular/core/rxjs-interop';
+import { firstValueFrom, map } from 'rxjs';
+import { errorMessage, TrackerApi } from '../tracker-api';
+import { formatCoverImage } from '../cover-image';
+import { eventCoverUrl, STATUSES, type Catalog, type Event, type Task, type Template } from '../event.model';
+
+const emptyEvent: Event = {
+  id: '', revision: 0, title: '', date: '', location: '', description: '',
+  roles: [], tasks: [], timeline: [], info: [],
+};
+type EditableTask = Omit<Task, 'assignees'>;
+type EditableEvent = Omit<Event, 'tasks' | 'roles' | 'coverVersion'> & {
+  tasks: EditableTask[];
+  roles: (Omit<Event['roles'][number], 'assignees' | 'tasks'> & { tasks: EditableTask[] })[];
+};
+
+function assignmentText(item: { assignee: string; assignees?: string[] }) {
+  return (item.assignees ?? (item.assignee ? [item.assignee] : [])).join(', ');
+}
+
+function editableAssignment<T extends { assignee: string; assignees?: string[] }>(item: T) {
+  const { assignees, ...rest } = item;
+  return { ...rest, assignee: assignmentText({ assignee: item.assignee, assignees }) };
+}
+
+function assignmentList<T extends { assignee: string }>(item: T) {
+  const assignees = item.assignee.split(/[\s,;]+/).filter(Boolean);
+  return { ...item, assignees, assignee: assignees[0] ?? '' };
+}
+
+function toEditor(event: Event): EditableEvent {
+  const { coverVersion: _coverVersion, ...editable } = event;
+  return {
+    ...editable,
+    tasks: event.tasks.map(editableAssignment),
+    roles: event.roles.map((role) => ({
+      ...editableAssignment(role),
+      tasks: role.tasks.map(editableAssignment),
+    })),
+  };
+}
+
+function fromEditor(event: EditableEvent): Event {
+  return {
+    ...event,
+    tasks: event.tasks.map(assignmentList),
+    roles: event.roles.map((role) => ({
+      ...assignmentList(role),
+      tasks: role.tasks.map(assignmentList),
+    })),
+  };
+}
+
+const sections = [
+  { id: 'intro', label: 'Вводные' },
+  { id: 'timeline', label: 'Расписание' },
+  { id: 'roles', label: 'Роли' },
+  { id: 'tasks', label: 'Общие задачи' },
+  { id: 'links', label: 'Ссылки' },
+] as const;
+type Section = typeof sections[number]['id'];
+
+@Component({
+  selector: 'app-organizer',
+  imports: [FormField, RouterLink, NgTemplateOutlet],
+  templateUrl: './organizer.html',
+})
+export class Organizer {
+  private readonly api = inject(TrackerApi);
+  private readonly route = inject(ActivatedRoute);
+  private readonly router = inject(Router);
+  private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('actionDialog');
+  private readonly importDialog = viewChild.required<ElementRef<HTMLDialogElement>>('importDialog');
+
+  protected readonly templatesView = toSignal(
+    this.route.queryParamMap.pipe(map((params) => params.get('view') === 'templates')),
+    { initialValue: this.route.snapshot.queryParamMap.get('view') === 'templates' },
+  );
+  protected readonly checking = signal(true);
+  protected readonly authenticated = signal(false);
+  protected readonly catalog = signal<Catalog>({ events: [], templates: [] });
+  protected readonly baseline = signal<Event | null>(null);
+  protected readonly visibleEditor = computed(() => this.templatesView() ? null : this.baseline());
+  protected readonly coverUrl = computed(() => {
+    const event = this.baseline();
+    return event ? eventCoverUrl(event) : null;
+  });
+  protected readonly coverBusy = signal(false);
+  protected readonly coverError = signal('');
+  protected readonly coverFeedback = signal('');
+  protected readonly draft = signal<EditableEvent>(emptyEvent);
+  protected readonly editForm = form(this.draft, (field) => required(field.title));
+  protected readonly dirty = computed(() => {
+    const baseline = this.baseline();
+    return !!baseline && JSON.stringify(toEditor(baseline)) !== JSON.stringify(this.draft());
+  });
+  protected readonly section = signal<Section>('intro');
+  protected readonly addedRoleId = signal('');
+  protected readonly sections = sections;
+  protected readonly statuses = STATUSES;
+  protected readonly saving = signal(false);
+  protected readonly error = signal('');
+  protected readonly feedback = signal('');
+  protected readonly password = signal({ value: '' });
+  protected readonly loginForm = form(this.password, (field) => required(field.value));
+  protected readonly action = signal<'create' | 'template'>('create');
+  protected readonly actionModel = signal({ title: '', date: '', templateId: '' });
+  protected readonly actionForm = form(this.actionModel, (field) => required(field.title));
+  protected readonly actionError = signal('');
+  protected readonly importModel = signal({ json: '' });
+  protected readonly importForm = form(this.importModel, (field) => {
+    required(field.json);
+    readonly(field.json, () => this.saving());
+  });
+  protected readonly importError = signal('');
+  protected readonly importPrompt = signal('');
+  protected readonly promptMessage = signal('');
+
+  constructor() {
+    void this.initialize();
+  }
+
+  private async initialize() {
+    this.error.set('');
+    this.checking.set(true);
+    try {
+      const { authenticated } = await firstValueFrom(this.api.session());
+      this.authenticated.set(authenticated);
+      if (authenticated) await this.refreshCatalog();
+    } catch (error) {
+      this.error.set(errorMessage(error));
+    } finally {
+      this.checking.set(false);
+    }
+  }
+
+  protected async signIn(event: SubmitEvent) {
+    event.preventDefault();
+    if (this.loginForm().invalid() || this.saving()) return;
+    await this.perform(async () => {
+      await firstValueFrom(this.api.login(this.password().value));
+      this.password.set({ value: '' });
+      this.authenticated.set(true);
+      await this.refreshCatalog();
+    });
+  }
+
+  protected async signOut() {
+    if (this.coverBusy() || !this.confirmDiscard()) return;
+    await this.perform(async () => {
+      await firstValueFrom(this.api.logout());
+      this.authenticated.set(false);
+      this.catalog.set({ events: [], templates: [] });
+      this.baseline.set(null);
+      this.draft.set(emptyEvent);
+    });
+  }
+
+  protected openEvent(event: Event) {
+    if (!this.confirmDiscard()) return;
+    this.loadEditor(event);
+  }
+
+  canLeave() {
+    return !this.coverBusy() && this.confirmDiscard();
+  }
+
+  protected closeEditor() {
+    if (this.coverBusy() || !this.confirmDiscard()) return;
+    this.baseline.set(null);
+    this.draft.set(emptyEvent);
+    this.error.set('');
+  }
+
+  protected openCreate(template?: Template) {
+    if (!this.confirmDiscard()) return;
+    this.openAction('create', template?.event.title ?? '', template?.id ?? '');
+  }
+
+  protected openImport() {
+    if (!this.confirmDiscard()) return;
+    this.importError.set('');
+    this.promptMessage.set('');
+    this.importDialog().nativeElement.showModal();
+    if (!this.importPrompt()) {
+      void firstValueFrom(this.api.importPrompt()).then(
+        (prompt) => this.importPrompt.set(prompt),
+        () => this.promptMessage.set('Не удалось загрузить промпт. Попробуйте открыть его по ссылке.'),
+      );
+    }
+  }
+
+  protected closeImport() {
+    this.importDialog().nativeElement.close();
+  }
+
+  protected async copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(this.importPrompt());
+      this.promptMessage.set('Промпт скопирован');
+    } catch {
+      this.promptMessage.set('Откройте промпт по ссылке, чтобы скопировать его вручную.');
+    }
+  }
+
+  protected async submitImport(event: SubmitEvent) {
+    event.preventDefault();
+    if (this.saving() || this.importForm().invalid()) return;
+    this.importError.set('');
+    let payload: unknown;
+    try {
+      payload = JSON.parse(this.importModel().json.trim());
+    } catch {
+      this.importError.set('Некорректный JSON. Вставьте один объект JSON без Markdown-разметки.');
+      return;
+    }
+    if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+      this.importError.set('Вставьте один объект JSON мероприятия в фигурных скобках.');
+      return;
+    }
+    this.saving.set(true);
+    try {
+      const imported = await firstValueFrom(this.api.importEvent(payload));
+      this.catalog.update((catalog) => ({ ...catalog, events: [imported, ...catalog.events] }));
+      this.loadEditor(imported);
+      this.importDialog().nativeElement.close();
+      this.importModel.set({ json: '' });
+      if (this.templatesView()) await this.router.navigate(['/admin']);
+      this.feedback.set('Мероприятие импортировано');
+    } catch (error) {
+      this.importError.set(errorMessage(error));
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  protected openSaveTemplate() {
+    const event = this.baseline();
+    if (event) this.openAction('template', event.title, '');
+  }
+
+  protected async submitAction(event: SubmitEvent) {
+    event.preventDefault();
+    if (this.actionForm().invalid() || this.saving()) return;
+    this.actionError.set('');
+    this.saving.set(true);
+    const { title, date, templateId } = this.actionModel();
+    try {
+      if (this.action() === 'template') {
+        await firstValueFrom(this.api.saveTemplate(this.draft().id, title));
+        this.feedback.set('Шаблон сохранён');
+      } else {
+        const created = await firstValueFrom(this.api.createEvent(title, date, templateId || undefined));
+        this.loadEditor(created);
+        if (this.templatesView()) await this.router.navigate(['/admin']);
+        this.feedback.set('Мероприятие создано');
+      }
+      this.dialog().nativeElement.close();
+      try {
+        await this.refreshCatalog();
+      } catch (error) {
+        this.error.set(errorMessage(error));
+      }
+    } catch (error) {
+      this.actionError.set(errorMessage(error));
+    } finally {
+      this.saving.set(false);
+    }
+  }
+
+  protected closeAction() {
+    this.dialog().nativeElement.close();
+  }
+
+  protected async save(event: SubmitEvent) {
+    event.preventDefault();
+    if (!this.dirty() || this.editForm().invalid() || this.saving() || this.coverBusy()) return;
+    await this.perform(async () => {
+      const saved = await firstValueFrom(this.api.saveEvent(fromEditor(this.draft())));
+      this.baseline.set(saved);
+      this.draft.set(toEditor(saved));
+      this.catalog.update((catalog) => ({
+        ...catalog,
+        events: catalog.events.map((entry) => entry.id === saved.id ? saved : entry),
+      }));
+      this.feedback.set('Изменения сохранены');
+    });
+  }
+
+  protected async chooseCover(input: HTMLInputElement) {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+
+    await this.changeCover(async (id) => {
+      let image: Blob;
+      try {
+        image = await formatCoverImage(file);
+      } catch (error) {
+        this.coverError.set(error instanceof Error ? error.message : 'Не удалось подготовить обложку.');
+        return;
+      }
+      return firstValueFrom(this.api.uploadCover(id, image));
+    }, 'Обложка сохранена');
+  }
+
+  protected async deleteCover() {
+    await this.changeCover((id) => firstValueFrom(this.api.removeCover(id)), 'Обложка удалена');
+  }
+
+  private async changeCover(change: (id: string) => Promise<Event | undefined>, feedback: string) {
+    const current = this.baseline();
+    if (!current || this.coverBusy() || this.saving()) return;
+    this.coverBusy.set(true);
+    this.coverError.set('');
+    this.coverFeedback.set('');
+    try {
+      const updated = await change(current.id);
+      if (!updated) return;
+      const { coverVersion } = updated;
+      this.baseline.update((event) => event?.id === current.id ? { ...event, coverVersion } : event);
+      this.catalog.update((catalog) => ({
+        ...catalog,
+        events: catalog.events.map((event) => event.id === current.id ? { ...event, coverVersion } : event),
+      }));
+      this.coverFeedback.set(feedback);
+    } catch (error) {
+      this.coverError.set(errorMessage(error));
+    } finally {
+      this.coverBusy.set(false);
+    }
+  }
+
+  protected async reloadEvent() {
+    if (this.coverBusy() || !this.confirmDiscard()) return;
+    await this.perform(async () => {
+      this.loadEditor(await firstValueFrom(this.api.event(this.draft().id)));
+    });
+  }
+
+  protected selectSection(section: Section) {
+    this.section.set(section);
+  }
+
+  protected addInfo() {
+    this.draft.update((event) => ({ ...event, info: [
+      ...event.info, { id: crypto.randomUUID(), label: '', value: '' },
+    ] }));
+  }
+
+  protected addTime() {
+    this.draft.update((event) => ({ ...event, timeline: [
+      ...event.timeline, { id: crypto.randomUUID(), title: '', start: '', end: '', description: '' },
+    ] }));
+  }
+
+  protected addRole() {
+    const id = crypto.randomUUID();
+    this.addedRoleId.set(id);
+    this.draft.update((event) => ({ ...event, roles: [
+      ...event.roles, { id, title: '', description: '', assignee: '', tasks: [] },
+    ] }));
+  }
+
+  protected removeItem(list: 'info' | 'timeline' | 'roles', id: string) {
+    this.draft.update((event) => ({ ...event, [list]: event[list].filter((entry) => entry.id !== id) }));
+  }
+
+  protected addTask(roleId?: string) {
+    const task: Task = {
+      id: crypto.randomUUID(), title: '', description: '', start: '', end: '', assignee: '', status: 'todo',
+    };
+    this.changeTasks((tasks) => [...tasks, task], roleId);
+  }
+
+  protected removeTask(taskId: string, roleId?: string) {
+    this.changeTasks((tasks) => tasks.filter((task) => task.id !== taskId), roleId);
+  }
+
+  protected publicLink(id: string) {
+    return new URL('/e/' + encodeURIComponent(id), window.location.origin).href;
+  }
+
+  protected async copy(link: string, input: HTMLInputElement) {
+    try {
+      await navigator.clipboard.writeText(link);
+      this.feedback.set('Ссылка скопирована');
+    } catch {
+      input.focus();
+      input.select();
+    }
+  }
+
+  private changeTasks(change: (tasks: EditableTask[]) => EditableTask[], roleId?: string) {
+    this.draft.update((event) => roleId
+      ? { ...event, roles: event.roles.map((role) =>
+          role.id === roleId ? { ...role, tasks: change(role.tasks) } : role,
+        ) }
+      : { ...event, tasks: change(event.tasks) });
+  }
+
+  private loadEditor(event: Event) {
+    this.coverError.set('');
+    this.coverFeedback.set('');
+    this.baseline.set(event);
+    this.draft.set(toEditor(event));
+    this.section.set('intro');
+    this.addedRoleId.set('');
+    this.error.set('');
+    this.feedback.set('');
+  }
+
+  private openAction(action: 'create' | 'template', title: string, templateId: string) {
+    this.action.set(action);
+    this.actionModel.set({ title, date: '', templateId });
+    this.actionError.set('');
+    this.dialog().nativeElement.showModal();
+  }
+
+  private confirmDiscard() {
+    return !this.dirty() || window.confirm('Оставить несохранённые изменения?');
+  }
+
+  private async refreshCatalog() {
+    this.catalog.set(await firstValueFrom(this.api.catalog()));
+  }
+
+  private async perform(operation: () => Promise<void>) {
+    if (this.saving()) return;
+    this.saving.set(true);
+    this.error.set('');
+    this.feedback.set('');
+    try {
+      await operation();
+    } catch (error) {
+      this.error.set(errorMessage(error));
+    } finally {
+      this.saving.set(false);
+    }
+  }
+}

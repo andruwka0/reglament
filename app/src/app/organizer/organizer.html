@@ -1,0 +1,265 @@
+@if (checking()) {
+  <p class="notice" role="status">Открываем кабинет…</p>
+} @else if (!authenticated()) {
+  <section class="panel login-panel">
+    <h1>Кабинет организатора</h1>
+    <p class="muted">Войдите, чтобы редактировать мероприятия и создавать шаблоны.</p>
+    <form (submit)="signIn($event)">
+      <label class="field">Пароль
+        <input type="password" autocomplete="current-password" [formField]="loginForm.value">
+      </label>
+      <button type="submit" class="button primary" [disabled]="saving() || loginForm().invalid()">Войти</button>
+    </form>
+  </section>
+} @else {
+  <div class="organizer-heading inline-actions">
+    <div>
+      <h1>{{ templatesView() ? 'Шаблоны' : 'Мероприятия' }}</h1>
+      <p class="muted">{{ templatesView() ? 'Используйте знакомый план с новой командой.' : 'Управляйте расписанием, ролями и задачами команды.' }}</p>
+    </div>
+    <button class="button secondary" type="button" (click)="signOut()" [disabled]="saving() || coverBusy()">Выйти</button>
+  </div>
+
+  @if (visibleEditor(); as saved) {
+    <section class="editor panel" aria-label="Редактор мероприятия">
+      @if (error(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
+      @if (feedback(); as message) { <p class="notice" role="status" [textContent]="message"></p> }
+      <div class="editor-heading inline-actions">
+        <div>
+          <button class="button ghost" type="button" (click)="closeEditor()" [disabled]="coverBusy()">← К списку</button>
+          <h2>{{ draft().title || 'Новое мероприятие' }}</h2>
+        </div>
+        <div class="inline-actions">
+          <a class="button secondary" [routerLink]="['/e', saved.id]">Открыть страницу</a>
+          <button class="button secondary" type="button" [disabled]="dirty() || saving()" (click)="openSaveTemplate()">Сохранить как шаблон</button>
+        </div>
+      </div>
+      <nav class="tabs" aria-label="Разделы редактора">
+        @for (tab of sections; track tab.id) {
+          <button class="tab" type="button" [class.active]="section() === tab.id" [attr.aria-pressed]="section() === tab.id" (click)="selectSection(tab.id)">
+            {{ tab.label }}
+          </button>
+        }
+      </nav>
+      <form class="edit-section" (submit)="save($event)">
+        @switch (section()) {
+          @case ('intro') {
+            <div class="form-grid">
+              <label class="field wide">Название <input [formField]="editForm.title"></label>
+              <label class="field">Дата <input type="date" [formField]="editForm.date"></label>
+              <label class="field">Место <input [formField]="editForm.location"></label>
+              <label class="field wide">Описание <textarea rows="3" [formField]="editForm.description"></textarea></label>
+            </div>
+            <section class="cover-editor" aria-labelledby="cover-title">
+              <h3 id="cover-title">Обложка мероприятия</h3>
+              @if (coverUrl(); as url) {
+                <div class="cover-preview"><img [src]="url" alt="Текущая обложка мероприятия"></div>
+              }
+              <p class="cover-hint" id="cover-hint">JPEG, PNG или WebP до 15 МБ. Трекер сожмёт изображение и обрежет края под размер шапки.</p>
+              <div class="cover-actions">
+                <input #coverFile type="file" accept="image/jpeg,image/png,image/webp,.jpg,.jpeg,.png,.webp"
+                  aria-label="Загрузить обложку" aria-describedby="cover-hint"
+                  [disabled]="coverBusy() || saving()" (change)="chooseCover(coverFile)">
+                @if (coverUrl()) {
+                  <button class="button danger" type="button" (click)="deleteCover()" [disabled]="coverBusy() || saving()">Удалить обложку</button>
+                }
+              </div>
+              @if (coverBusy()) { <p class="cover-hint" role="status">Сохраняем обложку…</p> }
+              @if (coverError(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
+              @if (coverFeedback(); as message) { <p class="cover-hint" role="status" [textContent]="message"></p> }
+            </section>
+            <h3>Контакты и ориентиры</h3>
+            <p class="muted">Добавьте контакты, ссылки и текст. Эти поля увидит каждый, у кого есть общая ссылка.</p>
+            @for (item of editForm.info; track item().value().id) {
+              <div class="edit-block form-grid">
+                <label class="field">Название поля <input [formField]="item.label" placeholder="Например, рабочий чат"></label>
+                <label class="field">Текст или ссылка <input [formField]="item.value"></label>
+                <button class="button danger" type="button" (click)="removeItem('info', item().value().id)">Удалить поле</button>
+              </div>
+            }
+            <button class="button secondary" type="button" (click)="addInfo()">Добавить поле</button>
+          }
+          @case ('timeline') {
+            @for (item of editForm.timeline; track item().value().id) {
+              <div class="edit-block form-grid">
+                <label class="field wide">Событие <input [formField]="item.title"></label>
+                <label class="field">Начало <input type="time" [formField]="item.start"></label>
+                <label class="field">Конец <input type="time" [formField]="item.end"></label>
+                <label class="field wide">Подробности <textarea rows="2" [formField]="item.description"></textarea></label>
+                <button class="button danger" type="button" (click)="removeItem('timeline', item().value().id)">Удалить событие</button>
+              </div>
+            } @empty {
+              <p class="empty-state">Добавьте ключевые моменты дня.</p>
+            }
+            <button class="button secondary" type="button" (click)="addTime()">Добавить событие</button>
+          }
+          @case ('roles') {
+            @for (role of editForm.roles; track role().value().id) {
+              @let roleId = role().value().id;
+              <details class="edit-block" [open]="$first || addedRoleId() === roleId">
+                <summary>{{ role().value().title || 'Новая роль' }}</summary>
+                <div class="form-grid">
+                  <label class="field">Название роли <input [formField]="role.title"></label>
+                  <label class="field">Ответственные за роль <input [formField]="role.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false"></label>
+                  <label class="field wide">Описание роли <textarea rows="2" [formField]="role.description"></textarea></label>
+                </div>
+                <h3>Задачи роли</h3>
+                @for (task of role.tasks; track task().value().id) {
+                  <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: task, roleId }"></ng-container>
+                }
+                <div class="inline-actions">
+                  <button class="button secondary" type="button" (click)="addTask(roleId)">Добавить задачу</button>
+                  <button class="button danger" type="button" (click)="removeItem('roles', roleId)">Удалить роль</button>
+                </div>
+              </details>
+            } @empty {
+              <p class="empty-state">Добавьте роли и назначьте ответственных.</p>
+            }
+            <button class="button secondary" type="button" (click)="addRole()">Добавить роль</button>
+          }
+          @case ('tasks') {
+            @for (task of editForm.tasks; track task().value().id) {
+              <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: task }"></ng-container>
+            } @empty {
+              <p class="empty-state">Добавьте задачи для всего мероприятия.</p>
+            }
+            <button class="button secondary" type="button" (click)="addTask()">Добавить задачу</button>
+          }
+          @case ('links') {
+            <h3>Общая ссылка для команды</h3>
+            <p class="muted">Любой, у кого есть ссылка, может посмотреть мероприятие и менять статусы задач во всех ролях.</p>
+            <div class="inline-actions link-row">
+              <input #publicUrl aria-label="Общая ссылка для команды" readonly [value]="publicLink(saved.id)">
+              <button class="button secondary" type="button" (click)="copy(publicUrl.value, publicUrl)">Копировать</button>
+            </div>
+          }
+        }
+        <div class="editor-actions inline-actions">
+          <button class="button primary" type="submit" [disabled]="!dirty() || saving() || coverBusy() || editForm().invalid()">{{ saving() ? 'Сохраняем…' : 'Сохранить изменения' }}</button>
+          @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
+          @if (error()) { <button class="button ghost" type="button" (click)="reloadEvent()">Загрузить сохранённую версию</button> }
+        </div>
+      </form>
+    </section>
+  } @else {
+    <div class="inline-actions catalog-actions">
+      <button class="button primary" type="button" (click)="openCreate()">Создать мероприятие</button>
+      <button class="button secondary" type="button" (click)="openImport()">Импорт JSON</button>
+      <a class="button ghost" routerLink="/admin" [queryParams]="templatesView() ? {} : { view: 'templates' }">
+        {{ templatesView() ? 'Все мероприятия' : 'Все шаблоны' }}
+      </a>
+    </div>
+    <div class="catalog-grid">
+      @if (templatesView()) {
+        @for (template of catalog().templates; track template.id) {
+          <article class="catalog-card panel">
+            <h2>{{ template.title }}</h2>
+            <p class="muted">Ролей {{ template.event.roles.length }} · событий в расписании {{ template.event.timeline.length }}</p>
+            <button class="button secondary" type="button" (click)="openCreate(template)">Создать по шаблону</button>
+          </article>
+        } @empty {
+          <p class="empty-state">Откройте мероприятие и сохраните его как шаблон.</p>
+        }
+      } @else {
+        @for (event of catalog().events; track event.id) {
+          <article class="catalog-card panel">
+            <h2>{{ event.title }}</h2>
+            <p class="muted">{{ event.date ? event.date.split('-').reverse().join('.') : 'Дата уточняется' }} @if (event.location) { · {{ event.location }} }</p>
+            <div class="inline-actions">
+              <button class="button secondary" type="button" (click)="openEvent(event)">Редактировать</button>
+              <a class="button ghost" [routerLink]="['/e', event.id]">Просмотр</a>
+            </div>
+          </article>
+        } @empty {
+          <p class="empty-state">Создайте первое мероприятие.</p>
+        }
+      }
+    </div>
+  }
+}
+@if (!visibleEditor()) {
+  @if (error(); as message) { <p class="notice error" role="alert" [textContent]="message"></p> }
+  @if (feedback(); as message) { <p class="notice" role="status" [textContent]="message"></p> }
+}
+
+<dialog class="dialog" #actionDialog aria-labelledby="action-title">
+  <form (submit)="submitAction($event)">
+    <h2 id="action-title">{{ action() === 'template' ? 'Сохранить как шаблон' : 'Новое мероприятие' }}</h2>
+    <label class="field">Название <input [formField]="actionForm.title"></label>
+    @if (action() === 'create') {
+      <label class="field">Дата <input type="date" [formField]="actionForm.date"></label>
+      <label class="field">Шаблон
+        <select [formField]="actionForm.templateId">
+          <option value="">С чистого листа</option>
+          @for (template of catalog().templates; track template.id) {
+            <option [value]="template.id">{{ template.title }}</option>
+          }
+        </select>
+      </label>
+    } @else {
+      <p class="muted">В шаблон войдут вводные, расписание, роли и задачи. Назначения и статусы нужно будет заполнить заново.</p>
+    }
+    @if (actionError()) { <p class="notice error" role="alert">{{ actionError() }}</p> }
+    <div class="inline-actions">
+      <button class="button primary" type="submit" [disabled]="saving() || actionForm().invalid()">{{ action() === 'template' ? 'Сохранить шаблон' : 'Создать' }}</button>
+      <button class="button ghost" type="button" (click)="closeAction()" [disabled]="saving()">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog
+  class="dialog import-dialog"
+  #importDialog
+  aria-labelledby="import-title"
+  (cancel)="saving() && $event.preventDefault()"
+>
+  <form (submit)="submitImport($event)">
+    <h2 id="import-title">Импорт мероприятия из JSON</h2>
+    <p id="import-hint">Вставьте JSON, чтобы создать мероприятие с вводными, расписанием, ролями и задачами.</p>
+    <div class="inline-actions import-tools">
+      <button type="button" class="button secondary" [disabled]="!importPrompt()" (click)="copyPrompt()">Копировать промпт</button>
+      <a class="button ghost" href="/event-import-prompt.txt" target="_blank" rel="noopener">Открыть промпт</a>
+      <a class="button ghost" href="/event-import-example.json" download>Скачать пример JSON</a>
+    </div>
+    @if (promptMessage(); as message) {
+      <p class="notice" role="status" [textContent]="message"></p>
+    }
+    <label class="field" for="import-json">JSON мероприятия</label>
+    <textarea
+      id="import-json"
+      rows="12"
+      spellcheck="false"
+      autocomplete="off"
+      aria-describedby="import-hint"
+      [formField]="importForm.json"
+    ></textarea>
+    @if (importError(); as message) {
+      <p class="notice error" role="alert" [textContent]="message"></p>
+    }
+    <div class="inline-actions">
+      <button class="button primary" type="submit" [disabled]="saving() || importForm().invalid()">
+        {{ saving() ? 'Импортируем…' : 'Создать из JSON' }}
+      </button>
+      <button class="button ghost" type="button" (click)="closeImport()" [disabled]="saving()">Отмена</button>
+    </div>
+  </form>
+</dialog>
+
+<ng-template #taskFields let-task let-roleId="roleId">
+  <div class="edit-block form-grid">
+    <label class="field wide">Задача <input [formField]="task.title"></label>
+    <label class="field wide">Подробности <textarea rows="2" [formField]="task.description"></textarea></label>
+    <label class="field">Начало <input type="time" [formField]="task.start"></label>
+    <label class="field">Конец <input type="time" [formField]="task.end"></label>
+    <label class="field">Ответственные за задачу
+      <input [formField]="task.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false">
+      @if (roleId) { <span class="muted">Пустое поле использует ответственных за роль.</span> }
+    </label>
+    <label class="field">Статус
+      <select [formField]="task.status">
+        @for (status of statuses; track status.id) { <option [value]="status.id">{{ status.label }}</option> }
+      </select>
+    </label>
+    <button class="button danger" type="button" (click)="removeTask(task().value().id, roleId)">Удалить задачу</button>
+  </div>
+</ng-template>

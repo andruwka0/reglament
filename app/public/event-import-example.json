@@ -1,0 +1,26 @@
+{
+  "title": "День открытых дверей",
+  "date": "2026-12-05",
+  "location": "Главный корпус",
+  "description": "Волонтёры встречают гостей у входа.",
+  "info": [
+    { "label": "Программа", "value": "https://example.org/program" }
+  ],
+  "timeline": [
+    { "title": "Приём гостей", "start": "10:00", "end": "11:00" }
+  ],
+  "roles": [
+    {
+      "title": "Регистрация",
+      "description": "Пост у главного входа.",
+      "assignees": ["@demo_checkin", "@demo_coordinator"],
+      "tasks": [
+        { "title": "Подготовить списки", "end": "10:00", "status": "todo" },
+        { "title": "Встречать гостей", "start": "10:00", "end": "11:00", "assignees": ["@demo_greeter"] }
+      ]
+    }
+  ],
+  "tasks": [
+    { "title": "Собрать указатели", "start": "11:00" }
+  ]
+}

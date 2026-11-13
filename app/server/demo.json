@@ -1,0 +1,85 @@
+{
+  "id": "regata-demo",
+  "title": "Математическая регата",
+  "date": "2026-11-15",
+  "location": "НИУ ВШЭ",
+  "description": "План работы команды волонтёров. Перед уходом с поста согласуйте подмену с координатором. В 20:30 начинается выдача подарков, работа гардероба и уборка.",
+  "info": [
+    { "id": "coordinator", "label": "Координатор", "value": "@demo_coordinator" },
+    { "id": "backup", "label": "Резервный контакт", "value": "@demo_backup" },
+    { "id": "chat", "label": "Рабочий чат", "value": "" },
+    { "id": "registration-table", "label": "Таблица регистрации", "value": "" },
+    { "id": "equipment-room", "label": "Аудитория для ноутбуков", "value": "Уточнить у координатора" },
+    { "id": "shift-end", "label": "Окончание смены", "value": "После уборки и отметки у координатора" }
+  ],
+  "timeline": [
+    { "id": "briefing", "title": "Сбор волонтёров", "start": "14:00", "end": "", "description": "«Аксиомы», 2-й этаж" },
+    { "id": "posts-ready", "title": "Готовность постов", "start": "15:30", "end": "", "description": "Регистрация, гардероб и навигация готовы к встрече гостей" },
+    { "id": "checkin", "title": "Регистрация участников", "start": "15:30", "end": "16:30", "description": "Встречаем гостей на 1-м этаже" },
+    { "id": "contest", "title": "Проведение регаты", "start": "16:30", "end": "20:30", "description": "Перейти на общие задачи можно с разрешения координатора" },
+    { "id": "wrapup", "title": "Завершение мероприятия", "start": "20:30", "end": "", "description": "Выдаём подарки, помогаем в гардеробе, убираем площадку" }
+  ],
+  "roles": [
+    {
+      "id": "registration",
+      "title": "Регистрация",
+      "description": "1-й этаж. Вопросы допуска передавайте координатору. Смена поста — по его разрешению.",
+      "assignee": "@demo_registration",
+      "tasks": [
+        { "id": "registration-equipment", "title": "Подготовить пост регистрации", "description": "Взять ноутбук и зарядку, проверить доступ к таблице регистрации.", "start": "14:00", "end": "15:30", "assignee": "", "status": "done" },
+        { "id": "registration-guest", "title": "Отмечать прибытие участников", "description": "Уточнять ФИО и вносить отметку в таблицу.", "start": "15:30", "end": "16:30", "assignee": "", "status": "doing" },
+        { "id": "registration-directions", "title": "Направлять гостей на 2-й этаж", "description": "При необходимости показать, где находится лестница.", "start": "15:30", "end": "16:30", "assignee": "@demo_greeter", "status": "todo" }
+      ]
+    },
+    {
+      "id": "coatroom",
+      "title": "Гардероб",
+      "description": "Помогаем при входе и после регаты. Подмену согласуйте с ответственным за гардероб.",
+      "assignee": "@demo_coatroom",
+      "tasks": [
+        { "id": "coatroom-check", "title": "Уточнить порядок работы", "description": "Встретиться с ответственным за гардероб.", "start": "14:00", "end": "15:30", "assignee": "", "status": "done" },
+        { "id": "coatroom-arrival", "title": "Помогать гостям сдать одежду", "description": "", "start": "15:30", "end": "16:30", "assignee": "", "status": "doing" },
+        { "id": "coatroom-departure", "title": "Помогать гостям получить одежду", "description": "", "start": "20:30", "end": "", "assignee": "", "status": "todo" }
+      ]
+    },
+    {
+      "id": "companions",
+      "title": "Работа с сопровождающими",
+      "description": "Аудитория «Нейрон». Согласуйте перерывы и оставайтесь на месте до передачи поста.",
+      "assignee": "@demo_companions",
+      "tasks": [
+        { "id": "companions-welcome", "title": "Встретить сопровождающих", "description": "Помочь гостям расположиться в «Нейроне».", "start": "15:30", "end": "16:30", "assignee": "", "status": "todo" },
+        { "id": "companions-questions", "title": "Отвечать на организационные вопросы", "description": "При необходимости уточнять ответы у координатора.", "start": "16:30", "end": "20:30", "assignee": "", "status": "todo" },
+        { "id": "companions-breaks", "title": "Согласовать перерывы", "description": "Проверить, кто остаётся с сопровождающими на время подмены.", "start": "16:30", "end": "", "assignee": "", "status": "todo" }
+      ]
+    },
+    {
+      "id": "flow",
+      "title": "Разделение потока",
+      "description": "Выход с лестницы на 2-м этаже. Оставляйте пост по согласованию с координатором.",
+      "assignee": "@demo_flow",
+      "tasks": [
+        { "id": "flow-students", "title": "Направлять детей в «Аксиомы»", "description": "В аудитории участников встречают «ласточки».", "start": "15:30", "end": "16:30", "assignee": "", "status": "todo" },
+        { "id": "flow-companions", "title": "Направлять сопровождающих в «Нейрон»", "description": "", "start": "15:30", "end": "16:30", "assignee": "", "status": "todo" },
+        { "id": "flow-substitute", "title": "Согласовать подмену на посту", "description": "Обратиться к координатору и команде навигации.", "start": "15:30", "end": "", "assignee": "", "status": "blocked" }
+      ]
+    },
+    {
+      "id": "navigation",
+      "title": "Навигация",
+      "description": "Дежурим на 1-м и 2-м этажах. Перед началом распределите зоны между волонтёрами.",
+      "assignee": "@demo_navigation",
+      "tasks": [
+        { "id": "navigation-assignment", "title": "Распределить зоны дежурства", "description": "", "start": "14:00", "end": "15:30", "assignee": "", "status": "done" },
+        { "id": "navigation-ground-floor", "title": "Подсказывать дорогу на 1-м этаже", "description": "Показывать регистрацию, гардероб и лестницу.", "start": "15:30", "end": "16:30", "assignee": "", "status": "todo" },
+        { "id": "navigation-first-floor", "title": "Помогать гостям на 2-м этаже", "description": "Показывать аудитории и поддерживать пост у лестницы.", "start": "15:30", "end": "16:30", "assignee": "@demo_greeter", "status": "todo" }
+      ]
+    }
+  ],
+  "tasks": [
+    { "id": "common-laptops", "title": "Подготовить ноутбуки", "description": "Уточнить аудиторию и схему расстановки, подключить ноутбуки и дождаться проверки.", "start": "16:30", "end": "", "assignee": "@demo_equipment", "status": "todo" },
+    { "id": "common-gifts", "title": "Собрать подарки в «Техно»", "description": "После проверки ноутбуков уточнить состав комплектов, собрать их и передать ответственному.", "start": "", "end": "", "assignee": "", "status": "todo" },
+    { "id": "common-cleanup", "title": "Убрать площадку", "description": "Вернуть материалы и отметиться у координатора перед уходом.", "start": "20:30", "end": "", "assignee": "", "status": "todo" }
+  ],
+  "revision": 1
+}
