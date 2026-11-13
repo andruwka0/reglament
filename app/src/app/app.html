@@ -7,6 +7,40 @@
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-label">Регламент</span>
     </a>
+    <nav class="site-nav" aria-label="Основная навигация">
+      <a
+        class="nav-item"
+        [attr.aria-current]="eventPath() ? 'page' : null"
+        [routerLink]="eventPath() || '/e/regata-demo'"
+      >
+        Обзор
+      </a>
+      @if (!eventPath() && session.authenticated()) {
+        <a
+          class="nav-item nav-item-compact"
+          aria-label="Шаблоны"
+          title="Шаблоны"
+          [attr.aria-current]="templates() ? 'page' : null"
+          routerLink="/admin"
+          [queryParams]="{ view: 'templates' }"
+        >
+          <svg
+            class="nav-item-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.7"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <rect x="8" y="3" width="12" height="14" rx="2.5" />
+            <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
+          </svg>
+          <span class="nav-item-label">Шаблоны</span>
+        </a>
+      }
+    </nav>
     @if (eventPath()) {
       <details #eventMenu class="event-menu" (keydown.escape)="closeMenu()">
         <summary class="event-menu-trigger brand" aria-label="Меню мероприятия">
@@ -23,7 +57,7 @@
           </span>
         </summary>
         <div class="event-menu-actions" role="group" aria-label="Действия мероприятия">
-          <button type="button" class="event-menu-option" (click)="copyPublicLink(true)">
+          <button type="button" class="event-menu-option" (click)="copyPublicLink()">
             <svg
               class="action-glyph"
               viewBox="0 0 24 24"
@@ -48,98 +82,76 @@
               (focus)="$event.target.select()"
             />
           }
-          <a
-            class="event-menu-option"
-            routerLink="/admin"
-            [queryParams]="{ view: 'templates' }"
-            (click)="closeMenu()"
-          >
-            <svg
-              class="action-glyph"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.7"
-              stroke-linecap="round"
-              aria-hidden="true"
+          @if (session.authenticated()) {
+            <a
+              class="event-menu-option"
+              routerLink="/admin"
+              [queryParams]="{ view: 'templates' }"
+              (click)="closeMenu()"
             >
-              <rect x="8" y="3" width="12" height="14" rx="2.5" />
-              <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
-            </svg>
-            <span>Шаблоны</span>
-          </a>
+              <svg
+                class="action-glyph"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <rect x="8" y="3" width="12" height="14" rx="2.5" />
+                <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
+              </svg>
+              <span>Шаблоны</span>
+            </a>
+            <button
+              type="button"
+              class="event-menu-option"
+              [disabled]="signingOut()"
+              (click)="signOut()"
+            >
+              <svg
+                class="action-glyph"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M13 5H7a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6m-3-7h9m-4-4 4 4-4 4" />
+              </svg>
+              <span>Выйти</span>
+            </button>
+          } @else if (!session.checking()) {
+            <a
+              class="event-menu-option"
+              routerLink="/admin"
+              [queryParams]="{ returnTo: eventPath() }"
+              (click)="closeMenu()"
+            >
+              <svg
+                class="action-glyph"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.7"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                aria-hidden="true"
+              >
+                <path d="M11 5h6a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2h-6M5 12h9m-4-4 4 4-4 4" />
+              </svg>
+              <span>Войти</span>
+            </a>
+          }
+          @if (menuError()) {
+            <p class="menu-error" role="alert">{{ menuError() }}</p>
+          }
         </div>
       </details>
     }
-    <nav class="site-nav" aria-label="Основная навигация">
-      <a
-        class="nav-item"
-        [attr.aria-current]="eventPath() ? 'page' : null"
-        [routerLink]="eventPath() || '/e/regata-demo'"
-      >
-        Обзор
-      </a>
-      <a
-        class="nav-item nav-item-compact"
-        aria-label="Шаблоны"
-        title="Шаблоны"
-        [attr.aria-current]="templates() ? 'page' : null"
-        routerLink="/admin"
-        [queryParams]="{ view: 'templates' }"
-      >
-        <svg
-          class="nav-item-icon"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <rect x="8" y="3" width="12" height="14" rx="2.5" />
-          <path d="M4 8v10a3 3 0 0 0 3 3h9m-4-13h4m-4 4h4" />
-        </svg>
-        <span class="nav-item-label">Шаблоны</span>
-      </a>
-    </nav>
-    @if (eventPath()) {
-      <button
-        class="button share-button"
-        type="button"
-        aria-label="Поделиться"
-        (click)="copyPublicLink()"
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.7"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          @if (copied()) {
-            <path d="m5 12 4 4 10-10" />
-          } @else {
-            <path
-              d="M10 14a4 4 0 0 0 6 0l3-3a4 4 0 0 0-6-6l-1 1m2 4a4 4 0 0 0-6 0l-3 3a4 4 0 0 0 6 6l1-1"
-            />
-          }
-        </svg>
-        <span class="share-label">{{ copied() || 'Поделиться' }}</span>
-      </button>
-      <span class="sr-only" aria-live="polite">{{ copied() }}</span>
-      @if (shareUrl()) {
-        <input
-          class="share-url"
-          aria-label="Общая ссылка"
-          readonly
-          [value]="shareUrl()"
-          (focus)="$event.target.select()"
-        />
-      }
-    }
+    <span class="sr-only" aria-live="polite">{{ copied() }}</span>
   </div>
 </header>
 <main class="content" id="main-content" #mainContent tabindex="-1"><router-outlet /></main>

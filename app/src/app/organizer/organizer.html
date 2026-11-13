@@ -3,7 +3,11 @@
 } @else if (!authenticated()) {
   <section class="panel login-panel" aria-labelledby="organizer-login-title">
     <h1 id="organizer-login-title">{{ templatesView() ? 'Шаблоны' : 'Кабинет организатора' }}</h1>
-    <p class="muted">{{ templatesView() ? 'Введите пароль организатора, чтобы открыть шаблоны.' : 'Войдите, чтобы редактировать мероприятия и создавать шаблоны.' }}</p>
+    <p class="muted">
+      @if (returnToEvent()) { Введите пароль организатора, чтобы вернуться к мероприятию. }
+      @else if (templatesView()) { Введите пароль организатора, чтобы открыть шаблоны. }
+      @else { Войдите, чтобы редактировать мероприятия и создавать шаблоны. }
+    </p>
     <form (submit)="signIn($event)">
       <label class="field">Пароль
         <input type="password" autocomplete="current-password" [formField]="loginForm.value">
@@ -71,14 +75,25 @@
             </section>
             <h3>Контакты и ориентиры</h3>
             <p class="muted">Добавьте контакты, ссылки и текст. Эти поля увидит каждый, у кого есть общая ссылка.</p>
-            @for (item of editForm.info; track item().value().id) {
-              <div class="edit-block form-grid">
-                <label class="field">Название поля <input [formField]="item.label" placeholder="Например, рабочий чат"></label>
-                <label class="field">Текст или ссылка <input [formField]="item.value"></label>
-                <button class="button danger" type="button" (click)="removeItem('info', item().value().id)">Удалить поле</button>
-              </div>
+            @for (info of draft().info; track info.id) {
+              @let item = editForm.info[$index];
+              @if (info.kind === 'text') {
+                <div class="edit-block form-grid info-text-editor">
+                  <label class="field wide">Текст без заголовка <textarea rows="3" [formField]="item.value"></textarea></label>
+                  <button class="button danger" type="button" (click)="removeItem('info', info.id)">Удалить текст</button>
+                </div>
+              } @else {
+                <div class="edit-block form-grid">
+                  <label class="field">Название поля <input [formField]="item.label" placeholder="Например, рабочий чат"></label>
+                  <label class="field">Текст или ссылка <input [formField]="item.value"></label>
+                  <button class="button danger" type="button" (click)="removeItem('info', info.id)">Удалить поле</button>
+                </div>
+              }
             }
-            <button class="button secondary" type="button" (click)="addInfo()">Добавить поле</button>
+            <div class="inline-actions">
+              <button class="button secondary" type="button" (click)="addInfo('field')">Добавить поле</button>
+              <button class="button secondary" type="button" (click)="addInfo('text')">Добавить текст</button>
+            </div>
           }
           @case ('timeline') {
             @for (item of editForm.timeline; track item().value().id) {
@@ -128,7 +143,7 @@
           }
           @case ('links') {
             <h3>Общая ссылка для команды</h3>
-            <p class="muted">Любой, у кого есть ссылка, может посмотреть мероприятие и менять статусы задач во всех ролях.</p>
+            <p class="muted">По ссылке виден весь план мероприятия. Чтобы менять статусы своих задач, участник выбирает свой Telegram-ник.</p>
             <div class="inline-actions link-row">
               <input #publicUrl aria-label="Общая ссылка для команды" readonly [value]="publicLink(saved.id)">
               <button class="button secondary" type="button" (click)="copy(publicUrl.value, publicUrl)">Копировать</button>

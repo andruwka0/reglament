@@ -1,8 +1,9 @@
 import { TestBed } from '@angular/core/testing';
 import { ActivatedRoute, convertToParamMap } from '@angular/router';
-import { BehaviorSubject, of, throwError } from 'rxjs';
+import { BehaviorSubject, Subject, of, throwError } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Event, Task } from '../event.model';
+import { OrganizerSession } from '../organizer-session';
 import { TrackerApi } from '../tracker-api';
 import { EventBoard } from './event-board';
 
@@ -47,8 +48,9 @@ const event: Event = {
   revision: 1,
 };
 
-function render(fragment: string | null = null, initialEvent = event) {
+function render(fragment: string | null = null, initialEvent = event, authenticated = false) {
   const loadEvent = vi.fn().mockReturnValue(of(initialEvent));
+  const updates = new Subject<Event>();
   const updateStatus = vi.fn().mockImplementation((_id, taskId, status) =>
     of({
       ...event,
@@ -73,7 +75,11 @@ function render(fragment: string | null = null, initialEvent = event) {
           fragment: new BehaviorSubject(fragment),
         },
       },
-      { provide: TrackerApi, useValue: { event: loadEvent, updateStatus } },
+      {
+        provide: TrackerApi,
+        useValue: { event: loadEvent, liveEvent: () => updates, updateStatus },
+      },
+      { provide: OrganizerSession, useValue: { authenticated: () => authenticated } },
     ],
   });
   const fixture = TestBed.createComponent(EventBoard);
@@ -84,7 +90,7 @@ function render(fragment: string | null = null, initialEvent = event) {
     control.dispatchEvent(new window.Event('change'));
     fixture.detectChanges();
   };
-  return { board, fixture, loadEvent, updateStatus, change };
+  return { board, fixture, loadEvent, updateStatus, change, updates };
 }
 
 describe('EventBoard', () => {
@@ -100,27 +106,28 @@ describe('EventBoard', () => {
     expect(window.localStorage.getItem('reglament-person:regatta')).toBeNull();
   });
 
-  it('updates a role task by the public link without credentials', () => {
+  it('updates a role task for the selected participant', () => {
     const { board, updateStatus, change } = render();
     expect(board.querySelector('h1')?.textContent).toContain('Регата');
+    expect(board.querySelectorAll('select.status')).toHaveLength(0);
+    change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
     const controls = board.querySelectorAll<HTMLSelectElement>('select.status');
-    expect(controls).toHaveLength(2);
-    expect(controls[1].getAttribute('aria-label')).toContain('Получить ключ');
-    change(controls[1], 'done');
-    expect(updateStatus).toHaveBeenCalledWith('regatta', 'second', 'done');
-    expect(controls[1].value).toBe('done');
+    expect(controls).toHaveLength(1);
+    expect(controls[0].getAttribute('aria-label')).toContain('Получить ключ');
+    change(controls[0], 'done');
+    expect(updateStatus).toHaveBeenCalledWith('regatta', 'second', 'done', '@volunteer');
+    expect(controls[0].value).toBe('done');
   });
 
-  it('updates an unassigned common task even when the link has a legacy fragment', () => {
-    const { board, fixture, updateStatus, change } = render('invite=old');
+  it('shows an unassigned common task as read-only', () => {
+    const { board, fixture, updateStatus } = render('invite=old');
     const tabs = [...board.querySelectorAll<HTMLButtonElement>('button.tab')];
     tabs.find((tab) => tab.textContent?.includes('Общие'))?.click();
     fixture.detectChanges();
-    const control = board.querySelector<HTMLSelectElement>('select.status')!;
-    expect(control.getAttribute('aria-label')).toContain('Убрать площадку');
-    change(control, 'doing');
-    expect(updateStatus).toHaveBeenCalledWith('regatta', 'third', 'doing');
-    expect(control.value).toBe('doing');
+    expect(board.querySelector('.task-main h3')?.textContent).toContain('Убрать площадку');
+    expect(board.querySelector('.task-status-readonly')?.textContent).toContain('К выполнению');
+    expect(board.querySelector('select.status')).toBeNull();
+    expect(updateStatus).not.toHaveBeenCalled();
   });
 
   it('can focus on one role and return to all roles', () => {
@@ -248,10 +255,39 @@ describe('EventBoard', () => {
 
   it('keeps the saved status visible when the update fails', () => {
     const { board, updateStatus, change } = render();
+    change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
     updateStatus.mockReturnValueOnce(throwError(() => new Error('offline')));
     const control = board.querySelector<HTMLSelectElement>('select.status')!;
     change(control, 'done');
     expect(control.value).toBe('todo');
     expect(board.querySelector('[role="alert"]')?.textContent).toContain('Не удалось');
+  });
+
+  it.each([true, false])('applies live help updates with organizer session %s', (authenticated) => {
+    vi.useFakeTimers();
+    const { board, fixture, updates } = render(null, event, authenticated);
+    try {
+      const next: Event = {
+        ...event,
+        roles: [
+          { ...event.roles[0], tasks: [{ ...assigned, status: 'blocked' }, other] },
+          event.roles[1],
+        ],
+        revision: 2,
+      };
+      updates.next(next);
+      fixture.detectChanges();
+      expect(board.querySelector('.task-status-readonly')?.textContent).toContain('Нужна помощь');
+      expect(!!board.querySelector('.help-alert')).toBe(authenticated);
+      vi.advanceTimersByTime(14_999);
+      fixture.detectChanges();
+      expect(!!board.querySelector('.help-alert')).toBe(authenticated);
+      vi.advanceTimersByTime(1);
+      fixture.detectChanges();
+      expect(board.querySelector('.help-alert')).toBeNull();
+    } finally {
+      fixture.destroy();
+      vi.useRealTimers();
+    }
   });
 });

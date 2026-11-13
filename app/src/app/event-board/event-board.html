@@ -49,18 +49,6 @@
             <span class="mobile-event-location">{{ board.location || 'Место уточняется' }}</span>
           </span>
         </span>
-        <svg
-          class="mobile-event-chevron"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-        >
-          <path d="m9 5 7 7-7 7" />
-        </svg>
       </button>
     </h1>
   } @else {
@@ -208,6 +196,37 @@
     </button>
   </nav>
 
+  @if (organizerSession.authenticated() && helpAlerts().length) {
+    <section class="help-alerts" aria-label="Запросы помощи">
+      @for (alert of helpAlerts(); track alert.taskId) {
+        <article class="help-alert">
+          <div class="help-alert-copy" role="alert">
+            <strong class="help-alert-heading">Нужна помощь</strong>
+            <p>{{ alert.title }}</p>
+            <span>{{ alert.group }}</span>
+          </div>
+          <button
+            type="button"
+            class="help-alert-close icon-button"
+            [attr.aria-label]="'Закрыть уведомление: ' + alert.title"
+            (click)="dismissHelpAlert(alert.taskId)"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              aria-hidden="true"
+            >
+              <path d="m6 6 12 12M18 6 6 18" />
+            </svg>
+          </button>
+        </article>
+      }
+    </section>
+  }
+
   <div class="event-grid">
     @if (page() === 'tasks' && mobile()) {
       <section class="mobile-posts" aria-label="Посты и задачи">
@@ -226,9 +245,12 @@
               </svg>
             </span>
             <span class="mobile-person-choice">
-              <span class="mobile-person-label">Участник в Telegram</span>
               <span class="mobile-person-picker">
-                <select #mobilePerson (change)="choosePerson(mobilePerson.value)">
+                <select
+                  #mobilePerson
+                  aria-label="Выбрать участника в Telegram"
+                  (change)="choosePerson(mobilePerson.value)"
+                >
                   <option value="" [selected]="!personFilter()">Все участники</option>
                   @for (person of participants(); track person) {
                     <option [value]="person" [selected]="person === personFilter()">
@@ -396,6 +418,10 @@
           </div>
         </div>
 
+        @if (participants().length && !personFilter()) {
+          <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи.</p>
+        }
+
         @if (loadingError() || saveError()) {
           <p class="notice error" role="alert">{{ saveError() || loadingError() }}</p>
         }
@@ -462,6 +488,12 @@
               >
             </div>
           </header>
+
+          @if (participants().length && !personFilter()) {
+            <p class="task-view-hint">
+              Чтобы отмечать задачи, выберите свой ник в разделе «Задачи».
+            </p>
+          }
 
           @if (loadingError() || saveError()) {
             <p class="notice error" role="alert">{{ saveError() || loadingError() }}</p>
@@ -621,62 +653,6 @@
     }
   </div>
 
-  <dialog
-    #taskDialog
-    class="dialog event-sheet task-sheet"
-    aria-labelledby="task-sheet-title"
-    (close)="closeTask()"
-    (click)="$event.target === taskDialog && taskDialog.close()"
-  >
-    @let details = taskDetails();
-    <header class="event-sheet-header">
-      <h2 id="task-sheet-title">{{ details?.task?.title || 'Задача' }}</h2>
-      <button
-        type="button"
-        class="event-sheet-close icon-button"
-        aria-label="Закрыть"
-        (click)="taskDialog.close()"
-        autofocus
-      >
-        <svg
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.8"
-          stroke-linecap="round"
-          aria-hidden="true"
-        >
-          <path d="m6 6 12 12M18 6 6 18" />
-        </svg>
-      </button>
-    </header>
-    @if (details) {
-      <div class="event-sheet-body task-details">
-        <p class="task-detail-group">{{ details.group }}</p>
-        <div class="task-detail-meta">
-          @if (details.task.start || details.task.end) {
-            <span class="task-detail-time">{{
-              formatTime(details.task.start, details.task.end)
-            }}</span>
-          }
-          <span class="task-detail-status" [attr.data-status]="details.task.status">
-            {{ statusLabel(details.task.status) }}
-          </span>
-        </div>
-        @if (details.task.description) {
-          <p class="task-detail-description">{{ details.task.description }}</p>
-        }
-        @if (details.assignees.length) {
-          <div class="responsibles">
-            <ng-container
-              *ngTemplateOutlet="responsibles; context: { $implicit: details.assignees }"
-            />
-          </div>
-        }
-      </div>
-    }
-  </dialog>
-
   <ng-template #personFilterControl>
     <label class="person-filter">
       <span>Telegram</span>
@@ -723,20 +699,26 @@
       <p class="event-intro">{{ board.description }}</p>
     }
     @if (board.info.length) {
-      <dl class="info-list">
+      <div class="info-list">
         @for (item of board.info; track item.id) {
           <div>
-            <dt>{{ item.label }}</dt>
-            <dd>
-              @if (infoLink(item.value); as link) {
-                <a [href]="link" target="_blank" rel="noopener noreferrer">{{ item.value }}</a>
-              } @else {
-                {{ item.value || 'Уточнить у организатора' }}
-              }
-            </dd>
+            @if (item.label) {
+              <dl class="info-field">
+                <dt>{{ item.label }}</dt>
+                <dd>
+                  @if (infoLink(item.value); as link) {
+                    <a [href]="link" target="_blank" rel="noopener noreferrer">{{ item.value }}</a>
+                  } @else {
+                    {{ item.value || 'Уточнить у организатора' }}
+                  }
+                </dd>
+              </dl>
+            } @else {
+              <p class="info-text preserve-lines wrap">{{ item.value }}</p>
+            }
           </div>
         }
-      </dl>
+      </div>
     } @else if (!board.description) {
       <p class="muted">Важная информация пока не добавлена.</p>
     }
@@ -748,8 +730,9 @@
 }
 
 <ng-template #taskRow let-task let-quick="quick">
-  <li class="task-row" [class.task-row-quick]="quick" [attr.data-task-status]="task.status">
-    @if (quick) {
+  @let editable = editableTaskIds().has(task.id);
+  <li class="task-row" [attr.data-task-status]="task.status">
+    @if (quick && editable) {
       <button
         type="button"
         class="task-check"
@@ -777,17 +760,7 @@
       </button>
     }
     <div class="task-main">
-      <h3>
-        <button
-          #taskTitle
-          class="task-open"
-          type="button"
-          aria-haspopup="dialog"
-          (click)="openTask(task, taskTitle)"
-        >
-          {{ task.title }}
-        </button>
-      </h3>
+      <h3>{{ task.title }}</h3>
       @if (task.description) {
         <p>{{ task.description }}</p>
       }
@@ -796,22 +769,28 @@
       @if (task.start || task.end) {
         <span class="task-time">{{ formatTime(task.start, task.end) }}</span>
       }
-      <div class="status-control" [attr.data-status]="task.status">
-        <select
-          class="status"
-          [attr.data-status]="task.status"
-          [attr.aria-label]="'Статус задачи «' + task.title + '»'"
-          [disabled]="pending().has(task.id)"
-          #statusControl
-          (change)="updateTask(task, statusControl)"
-        >
-          @for (option of statuses; track option.id) {
-            <option [value]="option.id" [selected]="option.id === task.status">
-              {{ option.label }}
-            </option>
-          }
-        </select>
-      </div>
+      @if (editable) {
+        <div class="status-control" [attr.data-status]="task.status">
+          <select
+            class="status"
+            [attr.data-status]="task.status"
+            [attr.aria-label]="'Статус задачи «' + task.title + '»'"
+            [disabled]="pending().has(task.id)"
+            #statusControl
+            (change)="updateTask(task, statusControl)"
+          >
+            @for (option of statuses; track option.id) {
+              <option [value]="option.id" [selected]="option.id === task.status">
+                {{ option.label }}
+              </option>
+            }
+          </select>
+        </div>
+      } @else {
+        <span class="task-status-readonly" [attr.data-status]="task.status">
+          {{ statusLabel(task.status) }}
+        </span>
+      }
     </div>
     @if (people(task).length && (!quick || !personFilter() || people(task).length > 1)) {
       <div class="responsibles task-responsibles">

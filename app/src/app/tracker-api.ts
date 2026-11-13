@@ -1,5 +1,6 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Service, inject } from '@angular/core';
+import { Observable } from 'rxjs';
 import type { Catalog, Event, Status, Template } from './event.model';
 
 @Service()
@@ -10,9 +11,29 @@ export class TrackerApi {
     return this.http.get<Event>(this.eventPath(id));
   }
 
-  updateStatus(id: string, taskId: string, status: Status) {
+  liveEvent(id: string): Observable<Event> {
+    return new Observable((subscriber) => {
+      if (typeof EventSource === 'undefined') {
+        subscriber.complete();
+        return;
+      }
+      const source = new EventSource(this.eventPath(id) + '/stream');
+      source.addEventListener('message', (message) => {
+        let snapshot: Event | null;
+        try {
+          snapshot = JSON.parse(message.data);
+        } catch {
+          return;
+        }
+        if (snapshot?.id === id && Number.isSafeInteger(snapshot.revision)) subscriber.next(snapshot);
+      });
+      return () => source.close();
+    });
+  }
+
+  updateStatus(id: string, taskId: string, status: Status, assignee: string) {
     const path = this.eventPath(id) + '/tasks/' + encodeURIComponent(taskId) + '/status';
-    return this.http.post<Event>(path, { status });
+    return this.http.post<Event>(path, { status, assignee });
   }
 
   session() {

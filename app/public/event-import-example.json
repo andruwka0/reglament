@@ -4,7 +4,8 @@
   "location": "Главный корпус",
   "description": "Волонтёры встречают гостей у входа.",
   "info": [
-    { "label": "Программа", "value": "https://example.org/program" }
+    { "label": "Программа", "value": "https://example.org/program" },
+    { "value": "Вход со двора.\nПокажите пропуск у входа." }
   ],
   "timeline": [
     { "title": "Приём гостей", "start": "10:00", "end": "11:00" }

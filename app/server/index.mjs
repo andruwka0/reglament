@@ -16,6 +16,9 @@ const loginWindow = 15 * 60 * 1000
 const maxBodyBytes = 512 * 1024
 const maxCoverBytes = 1024 * 1024
 const maxListLength = 150
+const maxEventStreams = 250
+const streamHeartbeatMs = 20_000
+const maxStreamBacklogBytes = maxBodyBytes * 2
 const contentTypes = {
   '.html': 'text/html; charset=utf-8', '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8', '.json': 'application/json', '.ico': 'image/x-icon',
@@ -133,9 +136,11 @@ function normalizeEvent(value, id, revision) {
   return {
     id, revision, title: titleOf(event.title), date: date(event.date),
     location: string(event.location, 'Место', 250), description: descriptionOf(event.description),
-    info: items(event.info, (item) => ({
-      label: string(item.label, 'Заголовок поля', 120, true), value: string(item.value, 'Значение', 4000),
-    })),
+    info: items(event.info, (item) => {
+      const label = string(item.label === undefined ? '' : item.label, 'Заголовок поля', 120)
+      const value = string(item.value === undefined ? '' : item.value, label ? 'Значение' : 'Текст', 4000, !label)
+      return { label, value }
+    }),
     timeline: items(event.timeline, scheduleItem),
     roles: items(event.roles, (role) => ({
       title: titleOf(role.title), description: descriptionOf(role.description),
@@ -387,13 +392,18 @@ function openStore(dataDir, demo) {
       db.prepare('INSERT INTO templates VALUES (?, ?)').run(id, JSON.stringify(template))
       return template
     }),
-    updateTask: (eventId, taskId, nextStatus, isAdmin, token) => transaction(() => {
-      const restricted = !isAdmin && Boolean(token)
-      const actor = restricted ? assigneeForToken(eventId, token) : undefined
-      if (restricted && !actor) throw new RequestError(401, 'Личная ссылка недействительна.')
+    updateTask: (eventId, taskId, nextStatus, { isAdmin, token, assignee }) => transaction(() => {
+      let actor = ''
+      if (token !== undefined) {
+        actor = assigneeForToken(eventId, token)
+        if (!actor) throw new RequestError(401, 'Личная ссылка недействительна.')
+      } else if (!isAdmin || assignee !== undefined) {
+        actor = person(assignee === undefined ? '' : assignee)
+        if (!actor) throw new RequestError(403, 'Выберите участника в Telegram, чтобы изменить статус.')
+      }
       const event = getStoredEvent(eventId)
       const { task, assignees } = findTask(event, taskId)
-      if (restricted && !assignees.includes(actor)) throw new RequestError(403, 'Эта задача назначена другому человеку.')
+      if (actor && !assignees.includes(actor)) throw new RequestError(403, 'Эта задача не назначена выбранному участнику.')
       if (task.status !== nextStatus) {
         task.status = nextStatus
         event.revision++
@@ -456,7 +466,9 @@ function writeJson(response, code, body) {
 }
 
 function requestToken(request) {
-  return request.headers.authorization?.match(/^Bearer (\S+)$/i)?.[1] || ''
+  const authorization = request.headers.authorization
+  if (authorization === undefined) return undefined
+  return authorization.match(/^Bearer (\S+)$/i)?.[1] ?? ''
 }
 
 function requestCookie(request) {
@@ -501,6 +513,43 @@ export function createTrackerServer({
   const passwordHash = digest(password)
   const sessions = new Map()
   const loginAttempts = new Map()
+  const eventStreams = new Map()
+
+  function writeStream(response, data) {
+    if (response.destroyed || response.writableEnded) return
+    if (response.writableLength > maxStreamBacklogBytes) response.destroy()
+    else response.write(data)
+  }
+
+  function streamEvent(id, response) {
+    const event = store.getEvent(id)
+    if (eventStreams.size >= maxEventStreams) {
+      throw new RequestError(503, 'Слишком много подключений. Обновления продолжат загружаться автоматически.')
+    }
+    response.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      'X-Accel-Buffering': 'no',
+    })
+    eventStreams.set(response, id)
+    response.once('close', () => eventStreams.delete(response))
+    writeStream(response, `retry: 3000\ndata: ${JSON.stringify(event)}\n\n`)
+  }
+
+  function publishEvent(response, event) {
+    writeJson(response, 200, event)
+    let frame
+    for (const [stream, id] of eventStreams) {
+      if (id !== event.id) continue
+      frame ??= `data: ${JSON.stringify(event)}\n\n`
+      writeStream(stream, frame)
+    }
+  }
+
+  const heartbeat = setInterval(() => {
+    for (const stream of eventStreams.keys()) writeStream(stream, ': heartbeat\n\n')
+  }, streamHeartbeatMs)
+  heartbeat.unref()
 
   function setSession(response, token, age) {
     response.setHeader('Set-Cookie', [
@@ -590,16 +639,17 @@ export function createTrackerServer({
         const [, rawId, action] = adminEvent
         const id = identifier(rawId)
         if (action === 'invites' && method === 'GET') return writeJson(response, 200, store.invites(id))
-        if (action === 'cover' && method === 'PUT') return writeJson(response, 200, store.saveCover(id, await readCover(request)))
-        if (action === 'cover' && method === 'DELETE') return writeJson(response, 200, store.removeCover(id))
-        if (!action && method === 'PUT') return writeJson(response, 200, store.updateEvent(id, await readBody(request)))
+        if (action === 'cover' && method === 'PUT') return publishEvent(response, store.saveCover(id, await readCover(request)))
+        if (action === 'cover' && method === 'DELETE') return publishEvent(response, store.removeCover(id))
+        if (!action && method === 'PUT') return publishEvent(response, store.updateEvent(id, await readBody(request)))
       }
     }
-    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|tasks\/([^/]+)\/status))?$/)
+    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|tasks\/([^/]+)\/status))?$/)
     if (publicEvent) {
       const [, rawEventId, action, taskId] = publicEvent
       const eventId = identifier(rawEventId)
       if (!action && method === 'GET') return writeJson(response, 200, store.getEvent(eventId))
+      if (action === 'stream' && method === 'GET') return streamEvent(eventId, response)
       if (action === 'cover' && method === 'GET') {
         const { mime, bytes } = store.getCover(eventId)
         response.writeHead(200, { 'Content-Type': mime, 'Content-Length': bytes.length, 'Cache-Control': 'no-store' })
@@ -612,7 +662,10 @@ export function createTrackerServer({
       }
       if (taskId && method === 'POST') {
         const body = await readBody(request)
-        return writeJson(response, 200, store.updateTask(eventId, identifier(taskId), status(body.status), isAdmin, token))
+        const updated = store.updateTask(eventId, identifier(taskId), status(body.status), {
+          isAdmin, token, assignee: body.assignee,
+        })
+        return publishEvent(response, updated)
       }
     }
     throw new RequestError(404, 'Страница не найдена.')
@@ -626,7 +679,12 @@ export function createTrackerServer({
       return writeJson(response, 500, { error: 'Не удалось выполнить запрос. Попробуйте ещё раз.' })
     })
   })
-  server.once('close', store.close)
+  server.once('close', () => {
+    clearInterval(heartbeat)
+    for (const stream of eventStreams.keys()) stream.destroy()
+    eventStreams.clear()
+    store.close()
+  })
   return server
 }
 

@@ -1,19 +1,22 @@
 import { NgTemplateOutlet } from '@angular/common';
 import { Component, computed, inject, signal, viewChild, ElementRef } from '@angular/core';
-import { FormField, form, readonly, required } from '@angular/forms/signals';
+import { FormField, applyEach, form, maxLength, readonly, required, validate } from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { firstValueFrom, map } from 'rxjs';
 import { errorMessage, TrackerApi } from '../tracker-api';
 import { formatCoverImage } from '../cover-image';
-import { eventCoverUrl, STATUSES, type Catalog, type Event, type Task, type Template } from '../event.model';
+import { OrganizerSession } from '../organizer-session';
+import { eventCoverUrl, STATUSES, type Catalog, type Event, type EventInfo, type Task, type Template } from '../event.model';
 
-const emptyEvent: Event = {
+const emptyEvent: EditableEvent = {
   id: '', revision: 0, title: '', date: '', location: '', description: '',
   roles: [], tasks: [], timeline: [], info: [],
 };
 type EditableTask = Omit<Task, 'assignees'>;
-type EditableEvent = Omit<Event, 'tasks' | 'roles' | 'coverVersion'> & {
+type InfoKind = 'field' | 'text';
+type EditableEvent = Omit<Event, 'info' | 'tasks' | 'roles' | 'coverVersion'> & {
+  info: (EventInfo & { kind: InfoKind })[];
   tasks: EditableTask[];
   roles: (Omit<Event['roles'][number], 'assignees' | 'tasks'> & { tasks: EditableTask[] })[];
 };
@@ -36,6 +39,7 @@ function toEditor(event: Event): EditableEvent {
   const { coverVersion: _coverVersion, ...editable } = event;
   return {
     ...editable,
+    info: event.info.map((item) => ({ ...item, kind: item.label.trim() ? 'field' : 'text' })),
     tasks: event.tasks.map(editableAssignment),
     roles: event.roles.map((role) => ({
       ...editableAssignment(role),
@@ -47,6 +51,7 @@ function toEditor(event: Event): EditableEvent {
 function fromEditor(event: EditableEvent): Event {
   return {
     ...event,
+    info: event.info.map(({ id, kind, label, value }) => ({ id, label: kind === 'text' ? '' : label, value })),
     tasks: event.tasks.map(assignmentList),
     roles: event.roles.map((role) => ({
       ...assignmentList(role),
@@ -73,6 +78,7 @@ export class Organizer {
   private readonly api = inject(TrackerApi);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly session = inject(OrganizerSession);
   private readonly dialog = viewChild.required<ElementRef<HTMLDialogElement>>('actionDialog');
   private readonly importDialog = viewChild.required<ElementRef<HTMLDialogElement>>('importDialog');
 
@@ -81,7 +87,14 @@ export class Organizer {
     { initialValue: this.route.snapshot.queryParamMap.get('view') === 'templates' },
   );
   protected readonly checking = signal(true);
-  protected readonly authenticated = signal(false);
+  protected readonly authenticated = this.session.authenticated;
+  protected readonly returnToEvent = toSignal(
+    this.route.queryParamMap.pipe(map((params) => {
+      const path = params.get('returnTo') ?? '';
+      return /^\/e\/[A-Za-z0-9_-]{1,80}$/.test(path) ? path : '';
+    })),
+    { initialValue: '' },
+  );
   protected readonly catalog = signal<Catalog>({ events: [], templates: [] });
   protected readonly baseline = signal<Event | null>(null);
   protected readonly visibleEditor = computed(() => this.templatesView() ? null : this.baseline());
@@ -93,7 +106,23 @@ export class Organizer {
   protected readonly coverError = signal('');
   protected readonly coverFeedback = signal('');
   protected readonly draft = signal<EditableEvent>(emptyEvent);
-  protected readonly editForm = form(this.draft, (field) => required(field.title));
+  protected readonly editForm = form(this.draft, (field) => {
+    required(field.title);
+    applyEach(field.info, (item) => {
+      maxLength(item.label, 120);
+      maxLength(item.value, 4000);
+      validate(item.label, ({ value, valueOf }) =>
+        valueOf(item.kind) === 'field' && !value().trim()
+          ? { kind: 'required', message: 'Укажите название поля.' }
+          : undefined,
+      );
+      validate(item.value, ({ value, valueOf }) =>
+        valueOf(item.kind) === 'text' && !value().trim()
+          ? { kind: 'required', message: 'Введите текст.' }
+          : undefined,
+      );
+    });
+  });
   protected readonly dirty = computed(() => {
     const baseline = this.baseline();
     return !!baseline && JSON.stringify(toEditor(baseline)) !== JSON.stringify(this.draft());
@@ -128,9 +157,11 @@ export class Organizer {
     this.error.set('');
     this.checking.set(true);
     try {
-      const { authenticated } = await firstValueFrom(this.api.session());
-      this.authenticated.set(authenticated);
-      if (authenticated) await this.refreshCatalog();
+      if (await this.session.check()) {
+        const event = this.returnToEvent();
+        if (event) await this.router.navigateByUrl(event, { replaceUrl: true });
+        else await this.refreshCatalog();
+      }
     } catch (error) {
       this.error.set(errorMessage(error));
     } finally {
@@ -142,18 +173,18 @@ export class Organizer {
     event.preventDefault();
     if (this.loginForm().invalid() || this.saving()) return;
     await this.perform(async () => {
-      await firstValueFrom(this.api.login(this.password().value));
+      await this.session.signIn(this.password().value);
       this.password.set({ value: '' });
-      this.authenticated.set(true);
-      await this.refreshCatalog();
+      const returnTo = this.returnToEvent();
+      if (returnTo) await this.router.navigateByUrl(returnTo, { replaceUrl: true });
+      else await this.refreshCatalog();
     });
   }
 
   protected async signOut() {
     if (this.coverBusy() || !this.confirmDiscard()) return;
     await this.perform(async () => {
-      await firstValueFrom(this.api.logout());
-      this.authenticated.set(false);
+      await this.session.signOut();
       this.catalog.set({ events: [], templates: [] });
       this.baseline.set(null);
       this.draft.set(emptyEvent);
@@ -346,9 +377,9 @@ export class Organizer {
     this.section.set(section);
   }
 
-  protected addInfo() {
+  protected addInfo(kind: InfoKind) {
     this.draft.update((event) => ({ ...event, info: [
-      ...event.info, { id: crypto.randomUUID(), label: '', value: '' },
+      ...event.info, { id: crypto.randomUUID(), kind, label: '', value: '' },
     ] }));
   }
 

@@ -1,11 +1,50 @@
 import { TestBed } from '@angular/core/testing';
-import { ActivatedRoute, convertToParamMap, provideRouter } from '@angular/router';
+import { ActivatedRoute, convertToParamMap, provideRouter, Router } from '@angular/router';
 import { of } from 'rxjs';
 import type { Event as TrackerEvent } from '../event.model';
+import { OrganizerSession } from '../organizer-session';
 import { Organizer } from './organizer';
 import { TrackerApi } from '../tracker-api';
 
 describe('Organizer', () => {
+  it.each([
+    ['/e/another-event', true],
+    ['//example.org/e/regata-demo', false],
+  ])('returns after organizer login only to a local event path (%s)', async (returnTo, shouldReturn) => {
+    const queryParamMap = convertToParamMap({ returnTo });
+    const catalog = vi.fn(() => of({ events: [], templates: [] }));
+    const login = vi.fn(() => of({ authenticated: true }));
+    TestBed.configureTestingModule({
+      imports: [Organizer],
+      providers: [
+        provideRouter([{ path: 'e/:id', children: [] }]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap }, queryParamMap: of(queryParamMap) } },
+        { provide: TrackerApi, useValue: { session: () => of({ authenticated: false }), login, catalog } },
+      ],
+    });
+    const router = TestBed.inject(Router);
+    const navigate = vi.spyOn(router, 'navigateByUrl');
+    const fixture = TestBed.createComponent(Organizer);
+    await fixture.whenStable();
+    const page: HTMLElement = fixture.nativeElement;
+    const input = page.querySelector<HTMLInputElement>('input[type=password]')!;
+    input.value = 'test-password';
+    input.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    page.querySelector<HTMLButtonElement>('button[type=submit]')!.click();
+    await fixture.whenStable();
+
+    expect(login).toHaveBeenCalledWith('test-password');
+    expect(TestBed.inject(OrganizerSession).authenticated()).toBe(true);
+    if (shouldReturn) {
+      expect(navigate).toHaveBeenCalledWith(returnTo, { replaceUrl: true });
+      expect(catalog).not.toHaveBeenCalled();
+    } else {
+      expect(navigate).not.toHaveBeenCalled();
+      expect(catalog).toHaveBeenCalledOnce();
+    }
+  });
+
   it('requires organizer sign-in before exposing the event editor', async () => {
     const queryParamMap = convertToParamMap({});
     await TestBed.configureTestingModule({
@@ -118,5 +157,58 @@ describe('Organizer', () => {
     button('Сохранить изменения').click();
     await fixture.whenStable();
     expect(submitted?.roles[0].assignees).toEqual(['@existing', '@second', '@third']);
+  });
+
+  it('adds and saves a multiline text block without a contact heading', async () => {
+    const queryParamMap = convertToParamMap({});
+    const stored: TrackerEvent = {
+      id: 'test', revision: 1, title: 'Турнир', date: '', location: '', description: '',
+      info: [{ id: 'chat', label: 'Чат', value: 'https://example.org/chat' }],
+      roles: [], timeline: [], tasks: [],
+    };
+    let submitted: TrackerEvent | undefined;
+    TestBed.configureTestingModule({
+      imports: [Organizer],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap }, queryParamMap: of(queryParamMap) } },
+        { provide: TrackerApi, useValue: {
+          session: () => of({ authenticated: true }),
+          catalog: () => of({ events: [stored], templates: [] }),
+          saveEvent: (event: TrackerEvent) => {
+            submitted = event;
+            return of({ ...event, revision: 2 });
+          },
+        } },
+      ],
+    });
+    const fixture = TestBed.createComponent(Organizer);
+    await fixture.whenStable();
+    const page = fixture.nativeElement as HTMLElement;
+    const button = (name: string) => [...page.querySelectorAll('button')]
+      .find((element) => element.textContent?.trim() === name)!;
+    button('Редактировать').click();
+    await fixture.whenStable();
+    button('Добавить текст').click();
+    await fixture.whenStable();
+    const text = page.querySelector<HTMLTextAreaElement>('.info-text-editor textarea')!;
+    text.value = 'Вход через двор.\nЗвоните координатору.';
+    text.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(submitted?.info).toEqual([
+      stored.info[0],
+      { id: expect.any(String), label: '', value: text.value },
+    ]);
+    expect(page.querySelectorAll('.info-text-editor textarea')).toHaveLength(1);
+
+    button('Удалить поле').click();
+    await fixture.whenStable();
+    expect(page.querySelector<HTMLTextAreaElement>('.info-text-editor textarea')?.value)
+      .toBe(text.value);
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(submitted?.info).toEqual([{ id: expect.any(String), label: '', value: text.value }]);
   });
 });

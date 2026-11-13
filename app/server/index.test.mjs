@@ -40,17 +40,19 @@ async function fixture(t) {
       const connection = Duplex.from({ readable: requestStream, writable: responseStream })
       connection.setTimeout = () => connection
       connection.destroySoon = () => connection.end()
+      client.once('close', () => connection.destroy())
       server.emit('connection', connection)
       return client
     }
     cookie = undefined
   }
 
-  function raw(path, { method = 'GET', body, admin, token, fetchSite, contentType, bytes = false } = {}) {
+  function raw(path, { method = 'GET', body, admin, token, authorization, fetchSite, contentType, bytes = false } = {}) {
     const headers = {}
     if (body !== undefined) headers['Content-Type'] = contentType ?? 'application/json'
     if (admin && cookie) headers.Cookie = cookie
-    if (token) headers.Authorization = `Bearer ${token}`
+    if (authorization !== undefined) headers.Authorization = authorization
+    else if (token) headers.Authorization = `Bearer ${token}`
     if (fetchSite) headers['Sec-Fetch-Site'] = fetchSite
     return new Promise((resolve, reject) => {
       const request = httpRequest(`http://regatta.test${path}`, { agent, method, headers }, (response) => {
@@ -73,6 +75,44 @@ async function fixture(t) {
     return { status, data: JSON.parse(text), headers }
   }
 
+  function stream(path) {
+    return new Promise((resolve, reject) => {
+      const request = httpRequest(`http://regatta.test/api${path}`, { agent }, (response) => {
+        if (response.statusCode !== 200) {
+          response.resume()
+          reject(new Error(`Expected stream to return HTTP 200, got ${response.statusCode}`))
+          return
+        }
+        response.setEncoding('utf8')
+        const queue = []
+        let buffer = ''
+        let pending
+        response.on('data', (chunk) => {
+          buffer += chunk
+          let boundary
+          while ((boundary = buffer.indexOf('\n\n')) >= 0) {
+            const data = buffer.slice(0, boundary).split('\n').find((line) => line.startsWith('data: '))
+            buffer = buffer.slice(boundary + 2)
+            if (!data) continue
+            const snapshot = JSON.parse(data.slice(6))
+            if (pending) {
+              pending(snapshot)
+              pending = undefined
+            } else queue.push(snapshot)
+          }
+        })
+        response.on('error', () => {})
+        resolve({
+          headers: response.headers,
+          next: () => queue.length ? Promise.resolve(queue.shift()) : new Promise((receive) => { pending = receive }),
+          close: () => request.destroy(),
+        })
+      })
+      request.on('error', reject)
+      request.end()
+    })
+  }
+
   async function login() {
     const result = await request('/admin/login', { method: 'POST', body: { password } })
     assert.equal(result.status, 200)
@@ -81,7 +121,7 @@ async function fixture(t) {
 
   start()
   return {
-    request, raw, login, dataDir,
+    request, raw, stream, login, dataDir,
     restart(options) {
       stop()
       start(options)
@@ -109,6 +149,62 @@ async function createEvent(app) {
 }
 
 const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=', 'base64')
+
+test('event streams push successful changes, preserve cover versions and reconnect with the latest snapshot', { timeout: 3500 }, async (t) => {
+  const app = await fixture(t)
+  const event = await createEvent(app)
+  const path = `/events/${event.id}`
+  assert.equal((await app.request('/events/missing/stream')).status, 404)
+  const subscription = await app.stream(`${path}/stream`)
+  t.after(() => subscription.close())
+  assert.match(subscription.headers['content-type'], /^text\/event-stream/)
+  assert.equal(subscription.headers['x-accel-buffering'], 'no')
+  assert.match(subscription.headers['cache-control'], /no-transform/)
+  assert.deepEqual(await subscription.next(), event)
+
+  const statusPath = `${path}/tasks/shared/status`
+  const denied = await app.request(statusPath, { method: 'POST', body: { status: 'blocked' } })
+  assert.equal(denied.status, 403)
+  const changed = await app.request(statusPath, {
+    method: 'POST', body: { status: 'blocked', assignee: '@volunteer' },
+  })
+  assert.equal(changed.status, 200)
+  assert.equal(changed.data.tasks[0].status, 'blocked')
+  assert.deepEqual(await subscription.next(), changed.data)
+
+  const cover = await app.request(`/admin${path}/cover`, {
+    method: 'PUT', admin: true, body: tinyPng, contentType: 'image/png',
+  })
+  assert.equal(cover.status, 200)
+  assert.equal(cover.data.revision, changed.data.revision)
+  assert.deepEqual(await subscription.next(), cover.data)
+  const edited = await app.request(`/admin${path}`, {
+    method: 'PUT', admin: true, body: { ...cover.data, title: 'Новое название' },
+  })
+  assert.equal(edited.status, 200)
+  assert.deepEqual(await subscription.next(), edited.data)
+  subscription.close()
+
+  const removed = await app.request(`/admin${path}/cover`, { method: 'DELETE', admin: true })
+  assert.equal(removed.status, 200)
+  const resumed = await app.stream(`${path}/stream`)
+  t.after(() => resumed.close())
+  assert.deepEqual(await resumed.next(), removed.data)
+})
+
+test('streams a complete snapshot larger than the socket high-water mark', { timeout: 3500 }, async (t) => {
+  const app = await fixture(t)
+  const event = await createEvent(app)
+  event.info = Array.from({ length: 30 }, (_, index) => ({
+    id: `info-${index}`, label: `Памятка ${index}`, value: 'Длинная памятка. '.repeat(200),
+  }))
+  const path = `/events/${event.id}`
+  const saved = await app.request(`/admin${path}`, { method: 'PUT', admin: true, body: event })
+  assert.equal(saved.status, 200)
+  const stream = await app.stream(`${path}/stream`)
+  t.after(() => stream.close())
+  assert.deepEqual(await stream.next(), saved.data)
+})
 
 test('migrates existing events and persists a public cover independently of draft revisions', async (t) => {
   const app = await fixture(t)
@@ -145,7 +241,9 @@ test('migrates existing events and persists a public cover independently of draf
   })
   assert.equal(changed.status, 200)
   assert.equal(changed.data.coverVersion, saved.data.coverVersion)
-  const statusChanged = await app.request(`${path}/tasks/shared/status`, { method: 'POST', body: { status: 'done' } })
+  const statusChanged = await app.request(`${path}/tasks/shared/status`, {
+    method: 'POST', body: { status: 'done', assignee: '@volunteer' },
+  })
   assert.equal(statusChanged.data.coverVersion, saved.data.coverVersion)
   const template = await app.request('/admin/templates', {
     method: 'POST', admin: true, body: { eventId: event.id, title: 'Шаблон регаты' },
@@ -182,7 +280,7 @@ test('rejects oversized covers, unsupported formats and mismatched image signatu
   assert.equal((await app.request(`/events/${event.id}/cover`)).status, 404)
 })
 
-test('a shared event link lets visitors change any task status while structure stays private', async (t) => {
+test('a shared event link lets a selected participant change only their own assigned tasks', async (t) => {
   const app = await fixture(t)
   const event = await createEvent(app)
   const path = `/events/${event.id}`
@@ -190,19 +288,30 @@ test('a shared event link lets visitors change any task status while structure s
   assert.equal((await app.request('/admin/catalog')).status, 401)
   assert.equal((await app.request(`/admin${path}/invites`)).status, 401)
   assert.equal((await app.request(`/admin${path}`, { method: 'PUT', body: event })).status, 401)
-  const mark = (id, status, fetchSite = 'same-origin') => app.request(`${path}/tasks/${id}/status`, {
-    method: 'POST', body: { status, title: 'Другое название' }, fetchSite,
+  const mark = (id, status, assignee, options = {}) => app.request(`${path}/tasks/${id}/status`, {
+    method: 'POST', body: { status, assignee, title: 'Другое название' }, fetchSite: 'same-origin', ...options,
   })
-  assert.equal((await mark('role-default', 'doing', 'cross-site')).status, 403)
-  assert.equal((await mark('role-default', 'doing', 'same-site')).status, 403)
-  assert.equal((await mark('role-default', 'unknown')).status, 400)
+  assert.equal((await mark('role-default', 'doing', '@organizer', { fetchSite: 'cross-site' })).status, 403)
+  assert.equal((await mark('role-default', 'doing', '@organizer', { fetchSite: 'same-site' })).status, 403)
+  assert.equal((await mark('role-default', 'unknown', '@organizer')).status, 400)
+  assert.equal((await mark('role-default', 'doing')).status, 403)
+  assert.equal((await mark('role-default', 'doing', '')).status, 403)
+  assert.equal((await mark('role-default', 'doing', 'invalid handle')).status, 400)
+  assert.equal((await mark('role-default', 'doing', '@volunteer')).status, 403)
+  assert.equal((await mark('task-override', 'doing', '@organizer')).status, 403)
+  assert.equal((await mark('unassigned', 'done', '@volunteer')).status, 403)
+  assert.equal((await mark('task-override', 'doing', '@organizer', { admin: true })).status, 403)
+  assert.equal((await mark('unassigned', 'done', '', { admin: true })).status, 403)
+  assert.equal((await mark('role-default', 'doing', '@organizer', { token: 'invalid' })).status, 401)
+  assert.equal((await mark('role-default', 'doing', '@organizer', { authorization: 'Bearer' })).status, 401)
   assert.deepEqual((await app.request(path)).data, event)
-  assert.equal((await mark('role-default', 'doing')).data.roles[0].tasks[0].status, 'doing')
-  assert.equal((await mark('shared', 'blocked')).data.tasks[0].status, 'blocked')
-  const { data: updated } = await mark('unassigned', 'done')
+  assert.equal((await mark('role-default', 'doing', ' Organizer ')).data.roles[0].tasks[0].status, 'doing')
+  assert.equal((await mark('shared', 'blocked', '@volunteer')).data.tasks[0].status, 'blocked')
+  assert.equal((await mark('task-override', 'doing', '@volunteer')).data.roles[0].tasks[1].status, 'doing')
+  const { data: updated } = await mark('unassigned', 'done', undefined, { admin: true })
   assert.equal(updated.tasks[1].status, 'done')
   assert.equal(updated.tasks[1].title, event.tasks[1].title)
-  assert.equal(updated.revision, event.revision + 3)
+  assert.equal(updated.revision, event.revision + 4)
   assert.equal((await app.request(`/admin${path}`, { method: 'PUT', body: event, admin: true })).status, 409)
   app.restart()
   assert.deepEqual((await app.request(path)).data, updated)
@@ -219,10 +328,10 @@ test('existing personal links still work and cannot be used for a different assi
   assert.deepEqual(invites.map(({ assignee }) => assignee), ['@organizer', '@volunteer'])
   const [organizer, volunteer] = invites
   assert.equal((await app.request(`${path}/access`, { token: volunteer.token })).data.assignee, '@volunteer')
-  const mark = (id, token, status = 'doing') => app.request(`${path}/tasks/${id}/status`, {
-    method: 'POST', body: { status }, token,
+  const mark = (id, token, status = 'doing', assignee) => app.request(`${path}/tasks/${id}/status`, {
+    method: 'POST', body: { status, assignee }, token,
   })
-  assert.equal((await mark('shared', organizer.token)).status, 403)
+  assert.equal((await mark('shared', organizer.token, 'doing', '@volunteer')).status, 403)
   assert.equal((await mark('task-override', organizer.token)).status, 403)
   assert.equal((await mark('role-default', volunteer.token)).status, 403)
   assert.equal((await mark('task-override', volunteer.token)).data.roles[0].tasks[1].status, 'doing')
@@ -263,14 +372,17 @@ test('stores deduped assignment lists and inherits all role assignees in scoped 
   const invites = (await app.request(`/admin${path}/invites`, { admin: true })).data
   assert.deepEqual(invites.map(({ assignee }) => assignee), ['@extra', '@helper', '@organizer', '@volunteer'])
   const [extra, helper] = invites
-  const mark = (id, token) => app.request(`${path}/tasks/${id}/status`, {
-    method: 'POST', body: { status: 'done' }, token,
+  const mark = (id, token, assignee) => app.request(`${path}/tasks/${id}/status`, {
+    method: 'POST', body: { status: 'done', assignee }, token,
   })
   assert.equal((await mark('role-default', helper.token)).status, 200)
   assert.equal((await mark('task-override', helper.token)).status, 403)
   assert.equal((await mark('task-override', extra.token)).status, 200)
   assert.equal((await mark('shared', extra.token)).status, 403)
-  assert.equal((await mark('shared')).status, 200)
+  assert.equal((await mark('shared', undefined, '@extra')).status, 403)
+  assert.equal((await mark('role-default', undefined, '@helper')).status, 200)
+  assert.equal((await mark('task-override', undefined, '@helper')).status, 403)
+  assert.equal((await mark('task-override', undefined, '@extra')).status, 200)
   app.restart()
   const reloaded = (await app.request(path)).data
   assert.deepEqual(reloaded.roles[0].assignees, ['@organizer', '@helper'])
@@ -450,4 +562,37 @@ test('the example linked in the import dialog is accepted as written', async (t)
   assert.equal(result.data.title, body.title)
   assert.deepEqual(result.data.roles[0].assignees, body.roles[0].assignees)
   assert.deepEqual(result.data.roles[0].tasks[1].assignees, body.roles[0].tasks[1].assignees)
+})
+
+test('imports and saves multiline event information without a title', async (t) => {
+  const app = await fixture(t)
+  await app.login()
+  const text = 'Вход через двор.\n\nЗвоните координатору при задержке.'
+  const imported = await app.request('/admin/events/import', {
+    method: 'POST', admin: true, body: {
+      title: 'Регата',
+      info: [{ value: text }, { label: 'Рабочий чат', value: 'https://example.org/chat' }],
+    },
+  })
+  assert.equal(imported.status, 201)
+  assert.deepEqual(imported.data.info.map(({ label, value }) => ({ label, value })), [
+    { label: '', value: text },
+    { label: 'Рабочий чат', value: 'https://example.org/chat' },
+  ])
+
+  const event = imported.data
+  const saved = await app.request(`/admin/events/${event.id}`, {
+    method: 'PUT', admin: true,
+    body: { ...event, info: [{ id: 'plain-text', label: '', value: text }] },
+  })
+  assert.equal(saved.status, 200)
+  assert.deepEqual((await app.request(`/events/${event.id}`)).data.info, [
+    { id: 'plain-text', label: '', value: text },
+  ])
+
+  const empty = await app.request('/admin/events/import', {
+    method: 'POST', admin: true, body: { title: 'Пустой текст', info: [{ value: ' \n ' }] },
+  })
+  assert.equal(empty.status, 400)
+  assert.match(empty.data.error, /Текст/)
 })
