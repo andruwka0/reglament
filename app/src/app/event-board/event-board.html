@@ -513,7 +513,21 @@
                       ? formatPlanTime(item.start, item.end, item.effectiveEnd === item.start)
                       : 'Без времени'
                   }}</span>
-                  <span class="plan-dot" aria-hidden="true"></span>
+                  <span class="plan-dot" aria-hidden="true">
+                    @if (item.state === 'past') {
+                      <svg
+                        class="plan-past-check"
+                        viewBox="0 0 16 16"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <path d="m3.5 8 3 3 6-6" />
+                      </svg>
+                    }
+                  </span>
                   @if (item.description || related.length) {
                     <details class="plan-card" [open]="item.state === 'current'">
                       <summary class="plan-summary">

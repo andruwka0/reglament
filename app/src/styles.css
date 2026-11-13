@@ -982,7 +982,18 @@ summary.plan-summary::after {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 .plan-item[data-state='current'] .plan-state { background: var(--accent-strong); color: #fff; }
-.plan-item[data-state='past'] .plan-dot { background: var(--line-strong); }
+.plan-item[data-state='past'] .plan-dot {
+  display: grid;
+  width: 16px;
+  height: 16px;
+  justify-self: center;
+  place-items: center;
+  margin-top: 13px;
+  border-color: #236241;
+  background: #236241;
+  color: white;
+}
+.plan-dot svg { width: 11px; height: 11px; }
 .plan-item[data-state='untimed'] .plan-dot { border-style: dashed; }
 .plan-related { min-width: 0; margin: 7px 0 0; padding: 0; border-top: 1px solid var(--line); list-style: none; }
 .plan-related .task-row { padding-inline: 0; }
@@ -1444,19 +1455,28 @@ summary.plan-summary::after {
   align-items: start;
   gap: 7px;
   padding: 10px 10px 10px 13px;
-  border: 1px solid #d6aab7;
-  border-inline-start: 4px solid var(--accent-strong);
+  border: 1px solid #965010;
+  border-inline-start-width: 4px;
   border-radius: 16px;
-  background: var(--paper);
+  background: #ffd78a;
   box-shadow: var(--glass-shadow);
+  color: #35220e;
   pointer-events: auto;
 }
 .help-alert-copy { display: grid; min-width: 0; gap: 4px; }
-.help-alert-heading { color: var(--accent-strong); font-size: 17px; font-weight: 760; }
+.help-alert-heading { font-size: 17px; font-weight: 760; }
 .help-alert-copy :where(p, span, strong) { overflow-wrap: anywhere; }
-.help-alert-copy p { color: var(--ink); font-size: 13px; line-height: 1.4; }
-.help-alert-copy span { color: var(--muted); font-size: 12px; line-height: 1.35; }
-.help-alert-close { width: 44px; min-width: 44px; min-height: 44px; color: var(--accent-strong); }
+.help-alert-copy p { font-size: 13px; line-height: 1.4; }
+.help-alert-copy span { color: #633e1b; font-size: 12px; line-height: 1.35; }
+.help-alert-close {
+  width: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-color: #965010;
+  background: #ffe9b7;
+  color: #824308;
+}
+.help-alert-close:hover:not(:disabled) { border-color: #965010; background: #ffcd70; }
 @media (max-width: 800px) {
   .help-alerts {
     inset-block-start: max(68px, calc(env(safe-area-inset-top, 0px) + 10px));
