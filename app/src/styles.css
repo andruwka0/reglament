@@ -163,9 +163,13 @@ textarea { min-height: 78px; resize: vertical; }
   line-height: 1.25;
 }
 .status-control select:focus { outline: none; }
-.status-control:has(select:focus-visible)::before { background: color-mix(in srgb, var(--status-bg) 89%, var(--status-ink)); }
-.status-control select:focus-visible { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
-.status-control option { background-color: #fff; color: #281c34; text-decoration: none; }
+.status-control:has(select:focus-visible)::before { background: var(--status-ink); }
+.status-control:has(select:focus-visible)::after { border-color: white; }
+.status-control select:focus-visible { color: white; }
+.status-control option { background-color: #fff; color: #281c34; }
+@media (forced-colors: active) {
+  .status-control select:focus-visible { background: Highlight; color: HighlightText; }
+}
 @media (max-width: 800px) {
   .status-control { width: 112px; }
   .status-control::before { inset-block: 11px; }
