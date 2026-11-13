@@ -2,7 +2,7 @@ services:
   reglament:
     build: .
     environment:
-      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set an ADMIN_PASSWORD with at least 12 characters}"
+      ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set an ADMIN_PASSWORD with at least 12 characters or a four-digit PIN}"
       SECURE_COOKIE: "0"
     ports:
       - "127.0.0.1:${REGLAMENT_HOST_PORT:-4177}:3000"

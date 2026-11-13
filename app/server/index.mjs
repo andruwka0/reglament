@@ -505,8 +505,8 @@ async function staticFile(response, method, path, directory) {
 export function createTrackerServer({
   password, dataDir = 'data', staticDir = 'dist/regatta-tracker/browser', demo, secureCookie = false,
 } = {}) {
-  if (typeof password !== 'string' || password.length < 12) {
-    throw new Error('Задайте ADMIN_PASSWORD длиной от 12 символов.')
+  if (typeof password !== 'string' || (password.length < 12 && !/^[0-9]{4}$/.test(password))) {
+    throw new Error('Задайте ADMIN_PASSWORD из четырёх цифр или длиной от 12 символов.')
   }
   const store = openStore(resolve(dataDir), demo)
   const directory = resolve(staticDir)

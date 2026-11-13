@@ -13,7 +13,7 @@ const task = (id, assignee = '') => ({
   id, title: `Задача ${id}`, description: '', start: '15:30', end: '16:00', assignee, status: 'todo',
 })
 
-async function fixture(t) {
+async function fixture(t, options) {
   const dataDir = await mkdtemp(join(tmpdir(), 'regatta-tracker-'))
   let server
   let agent
@@ -119,7 +119,7 @@ async function fixture(t) {
     assert.match(result.headers['set-cookie'][0], /HttpOnly.*SameSite=Strict/)
   }
 
-  start()
+  start(options)
   return {
     request, raw, stream, login, dataDir,
     restart(options) {
@@ -149,6 +149,23 @@ async function createEvent(app) {
 }
 
 const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=', 'base64')
+
+test('an organizer can sign in with a configured four-digit PIN', async (t) => {
+  const pin = '0637'
+  const app = await fixture(t, { password: pin })
+  const wrong = await app.request('/admin/login', { method: 'POST', body: { password: '637' } })
+  assert.equal(wrong.status, 401)
+  const result = await app.request('/admin/login', { method: 'POST', body: { password: pin } })
+  assert.equal(result.status, 200)
+  assert.match(result.headers['set-cookie'][0], /HttpOnly.*SameSite=Strict/)
+  assert.deepEqual((await app.request('/admin/session', { admin: true })).data, { authenticated: true })
+})
+
+test('short credentials other than four-digit PINs are rejected', () => {
+  for (const password of ['abc1', '063', '06371', '0637\n']) {
+    assert.throws(() => createTrackerServer({ password }), /ADMIN_PASSWORD/)
+  }
+})
 
 test('event streams push successful changes, preserve cover versions and reconnect with the latest snapshot', { timeout: 3500 }, async (t) => {
   const app = await fixture(t)
