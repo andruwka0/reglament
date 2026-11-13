@@ -50,6 +50,7 @@ a { color: var(--accent-strong); text-underline-offset: 3px; }
 }
 @media (any-pointer: coarse) {
   :where(button, a, select, summary) { -webkit-tap-highlight-color: transparent; }
+  select:focus-visible { outline: 1px solid var(--accent); outline-offset: -2px; }
 }
 ::selection { background: var(--accent-bright); color: var(--ink); }
 .muted { color: var(--muted); }
@@ -924,8 +925,6 @@ app-organizer > .notice { margin-top: 16px; }
 }
 .plan-clock svg { width: 15px; height: 15px; }
 .plan-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: end; gap: 3px 7px; }
-.plan-filter { width: min(100%, 380px); }
-.plan-filter select { width: 100%; }
 .plan-list, .team-list { display: grid; min-width: 0; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .plan-item {
   --plan-rail: 68px;

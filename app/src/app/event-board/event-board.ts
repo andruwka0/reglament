@@ -179,10 +179,7 @@ export class EventBoard {
   });
   protected readonly planTasks = computed(() => {
     const plan = this.livePlan();
-    return groupPlanTasks(
-      plan?.schedule ?? [],
-      this.personGroups().flatMap((group) => group.tasks),
-    );
+    return groupPlanTasks(plan?.schedule ?? [], this.tasks());
   });
   protected readonly team = computed(() => {
     const groups = this.taskGroups();
