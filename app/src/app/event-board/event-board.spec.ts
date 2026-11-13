@@ -4,7 +4,7 @@ import { BehaviorSubject, Subject, of, throwError } from 'rxjs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Event, Task } from '../event.model';
 import { OrganizerSession } from '../organizer-session';
-import { TrackerApi } from '../tracker-api';
+import { TrackerApi, type RoleSos } from '../tracker-api';
 import { EventBoard } from './event-board';
 
 const assigned: Task = {
@@ -51,6 +51,8 @@ const event: Event = {
 function render(fragment: string | null = null, initialEvent = event, authenticated = false) {
   const loadEvent = vi.fn().mockReturnValue(of(initialEvent));
   const updates = new Subject<Event>();
+  let receiveSos: ((request: RoleSos) => void) | undefined;
+  const requestSos = vi.fn().mockReturnValue(of({ sent: true }));
   const updateStatus = vi.fn().mockImplementation((_id, taskId, status) =>
     of({
       ...event,
@@ -77,7 +79,15 @@ function render(fragment: string | null = null, initialEvent = event, authentica
       },
       {
         provide: TrackerApi,
-        useValue: { event: loadEvent, liveEvent: () => updates, updateStatus },
+        useValue: {
+          event: loadEvent,
+          liveEvent: (_id: string, onSos: (request: RoleSos) => void) => {
+            receiveSos = onSos;
+            return updates;
+          },
+          updateStatus,
+          requestSos,
+        },
       },
       { provide: OrganizerSession, useValue: { authenticated: () => authenticated } },
     ],
@@ -90,7 +100,8 @@ function render(fragment: string | null = null, initialEvent = event, authentica
     control.dispatchEvent(new window.Event('change'));
     fixture.detectChanges();
   };
-  return { board, fixture, loadEvent, updateStatus, change, updates };
+  const sendSos = (request: RoleSos) => receiveSos!(request);
+  return { board, fixture, loadEvent, updateStatus, change, updates, requestSos, sendSos };
 }
 
 describe('EventBoard', () => {
@@ -107,16 +118,20 @@ describe('EventBoard', () => {
   });
 
   it('updates a role task for the selected participant', () => {
-    const { board, updateStatus, change } = render();
+    const { board, fixture, updateStatus, change } = render();
     expect(board.querySelector('h1')?.textContent).toContain('Регата');
-    expect(board.querySelectorAll('select.status')).toHaveLength(0);
+    expect(board.querySelectorAll('button.task-check')).toHaveLength(0);
     change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
-    const controls = board.querySelectorAll<HTMLSelectElement>('select.status');
+    const controls = board.querySelectorAll<HTMLButtonElement>('button.task-check');
     expect(controls).toHaveLength(1);
     expect(controls[0].getAttribute('aria-label')).toContain('Получить ключ');
-    change(controls[0], 'done');
+    const row = controls[0].closest('.task-row');
+    controls[0].click();
+    fixture.detectChanges();
     expect(updateStatus).toHaveBeenCalledWith('regatta', 'second', 'done', '@volunteer');
-    expect(controls[0].value).toBe('done');
+    expect(controls[0].getAttribute('aria-pressed')).toBe('true');
+    expect(board.querySelector('.task-row')).toBe(row);
+    expect(board.querySelector('select.status')).toBeNull();
   });
 
   it('shows an unassigned common task as read-only', () => {
@@ -125,8 +140,10 @@ describe('EventBoard', () => {
     tabs.find((tab) => tab.textContent?.includes('Общие'))?.click();
     fixture.detectChanges();
     expect(board.querySelector('.task-main h3')?.textContent).toContain('Убрать площадку');
-    expect(board.querySelector('.task-status-readonly')?.textContent).toContain('К выполнению');
-    expect(board.querySelector('select.status')).toBeNull();
+    expect(board.querySelector('.task-check-readonly')?.getAttribute('aria-label')).toBe(
+      'Не выполнено',
+    );
+    expect(board.querySelector('button.task-check')).toBeNull();
     expect(updateStatus).not.toHaveBeenCalled();
   });
 
@@ -201,7 +218,7 @@ describe('EventBoard', () => {
     ).toEqual(['Убрать площадку']);
   });
 
-  it('offers to clear an empty participant filter and resets a removed handle on refresh', () => {
+  it('keeps SOS available for a role member without tasks and resets a removed handle on refresh', () => {
     vi.useFakeTimers();
     const { board, fixture, loadEvent, change } = render(null, {
       ...event,
@@ -210,10 +227,8 @@ describe('EventBoard', () => {
     try {
       const people = board.querySelector<HTMLSelectElement>('.person-filter select')!;
       change(people, '@organizer');
-      expect(board.querySelector('.empty-state')?.textContent).toContain('нет задач');
-      board.querySelector<HTMLButtonElement>('.empty-state button')!.click();
-      fixture.detectChanges();
-      expect(people.value).toBe('');
+      expect(board.querySelector('.role-card')?.textContent).toContain('Задач пока нет');
+      expect(board.querySelector('.sos-button')).not.toBeNull();
 
       change(people, '@organizer');
       loadEvent.mockReturnValueOnce(
@@ -254,37 +269,114 @@ describe('EventBoard', () => {
   });
 
   it('keeps the saved status visible when the update fails', () => {
-    const { board, updateStatus, change } = render();
+    const { board, fixture, updateStatus, change } = render();
     change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
     updateStatus.mockReturnValueOnce(throwError(() => new Error('offline')));
-    const control = board.querySelector<HTMLSelectElement>('select.status')!;
-    change(control, 'done');
-    expect(control.value).toBe('todo');
+    const control = board.querySelector<HTMLButtonElement>('button.task-check')!;
+    control.click();
+    fixture.detectChanges();
+    expect(control.getAttribute('aria-pressed')).toBe('false');
     expect(board.querySelector('[role="alert"]')?.textContent).toContain('Не удалось');
   });
 
-  it.each([true, false])('applies live help updates with organizer session %s', (authenticated) => {
+  it('sends SOS for the selected role only and shows no shortcut in Team', () => {
+    const { board, fixture, change, requestSos } = render();
+    expect(board.querySelector('.sos-button')).toBeNull();
+    change(board.querySelector<HTMLSelectElement>('.person-filter select')!, '@volunteer');
+    board.querySelector<HTMLButtonElement>('.sos-button')!.click();
+    fixture.detectChanges();
+    expect(requestSos).toHaveBeenCalledExactlyOnceWith('regatta', 'welcome', '@volunteer');
+    expect(board.querySelector('.sos-feedback')?.textContent).toContain('отправлен');
+
+    [...board.querySelectorAll<HTMLButtonElement>('.event-dock-tab')]
+      .find((tab) => tab.textContent.includes('Команда'))!
+      .click();
+    fixture.detectChanges();
+    expect(board.querySelector('.team-person a')?.textContent).toContain('@');
+    expect(board.querySelector('.team-list button')).toBeNull();
+  });
+
+  it.each([true, false])(
+    'applies live role completion with organizer session %s',
+    (authenticated) => {
+      vi.useFakeTimers();
+      const { board, fixture, updates } = render(null, event, authenticated);
+      try {
+        const next: Event = {
+          ...event,
+          roles: [
+            { ...event.roles[0], tasks: [{ ...assigned, status: 'blocked' }, other] },
+            event.roles[1],
+          ],
+          revision: 2,
+        };
+        updates.next(next);
+        fixture.detectChanges();
+        expect(board.querySelector('.help-alert')).toBeNull();
+        updates.next({
+          ...next,
+          roles: [
+            { ...next.roles[0], tasks: [{ ...assigned, status: 'done' }, other] },
+            next.roles[1],
+          ],
+          revision: 3,
+        });
+        fixture.detectChanges();
+        expect(board.querySelector('.help-alert')).toBeNull();
+        updates.next({
+          ...next,
+          roles: [
+            {
+              ...next.roles[0],
+              tasks: [
+                { ...assigned, status: 'done' },
+                { ...other, status: 'done' },
+              ],
+            },
+            next.roles[1],
+          ],
+          revision: 4,
+        });
+        fixture.detectChanges();
+        const alert = board.querySelector('.help-alert[data-kind="complete"]');
+        expect(!!alert).toBe(authenticated);
+        if (authenticated) expect(alert?.textContent).toContain('Регистрация');
+        vi.advanceTimersByTime(179_999);
+        fixture.detectChanges();
+        expect(!!board.querySelector('.help-alert')).toBe(authenticated);
+        vi.advanceTimersByTime(1);
+        fixture.detectChanges();
+        expect(board.querySelector('.help-alert')).toBeNull();
+      } finally {
+        fixture.destroy();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it('shows role SOS for five minutes and allows immediate dismissal', () => {
     vi.useFakeTimers();
-    const { board, fixture, updates } = render(null, event, authenticated);
+    const { board, fixture, sendSos } = render(null, event, true);
     try {
-      const next: Event = {
-        ...event,
-        roles: [
-          { ...event.roles[0], tasks: [{ ...assigned, status: 'blocked' }, other] },
-          event.roles[1],
-        ],
-        revision: 2,
-      };
-      updates.next(next);
+      const request = { roleId: 'welcome', roleTitle: 'Регистрация', assignee: '@volunteer' };
+      sendSos(request);
       fixture.detectChanges();
-      expect(board.querySelector('.task-status-readonly')?.textContent).toContain('Нужна помощь');
-      expect(!!board.querySelector('.help-alert')).toBe(authenticated);
+      const alert = () => board.querySelector('.help-alert[data-kind="sos"]');
+      expect(alert()?.textContent).toContain('Нужна помощь');
+      expect(alert()?.textContent).toContain('Регистрация');
+      expect(alert()?.textContent).toContain('@volunteer');
       vi.advanceTimersByTime(299_999);
       fixture.detectChanges();
-      expect(!!board.querySelector('.help-alert')).toBe(authenticated);
+      expect(alert()).not.toBeNull();
       vi.advanceTimersByTime(1);
       fixture.detectChanges();
-      expect(board.querySelector('.help-alert')).toBeNull();
+      expect(alert()).toBeNull();
+
+      sendSos(request);
+      fixture.detectChanges();
+      alert()!.querySelector('button')!.click();
+      fixture.detectChanges();
+      expect(alert()).toBeNull();
     } finally {
       fixture.destroy();
       vi.useRealTimers();

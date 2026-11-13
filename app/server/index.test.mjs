@@ -75,9 +75,10 @@ async function fixture(t, options) {
     return { status, data: JSON.parse(text), headers }
   }
 
-  function stream(path) {
+  function stream(path, { admin = false } = {}) {
     return new Promise((resolve, reject) => {
-      const request = httpRequest(`http://regatta.test/api${path}`, { agent }, (response) => {
+      const headers = admin && cookie ? { Cookie: cookie } : {}
+      const request = httpRequest(`http://regatta.test/api${path}`, { agent, headers }, (response) => {
         if (response.statusCode !== 200) {
           response.resume()
           reject(new Error(`Expected stream to return HTTP 200, got ${response.statusCode}`))
@@ -91,20 +92,24 @@ async function fixture(t, options) {
           buffer += chunk
           let boundary
           while ((boundary = buffer.indexOf('\n\n')) >= 0) {
-            const data = buffer.slice(0, boundary).split('\n').find((line) => line.startsWith('data: '))
+            const lines = buffer.slice(0, boundary).split('\n')
+            const data = lines.find((line) => line.startsWith('data: '))
             buffer = buffer.slice(boundary + 2)
             if (!data) continue
-            const snapshot = JSON.parse(data.slice(6))
+            const name = lines.find((line) => line.startsWith('event: '))?.slice(7) || 'message'
+            const frame = { name, data: JSON.parse(data.slice(6)) }
             if (pending) {
-              pending(snapshot)
+              pending(frame)
               pending = undefined
-            } else queue.push(snapshot)
+            } else queue.push(frame)
           }
         })
         response.on('error', () => {})
+        const nextFrame = () => queue.length ? Promise.resolve(queue.shift()) : new Promise((receive) => { pending = receive })
         resolve({
           headers: response.headers,
-          next: () => queue.length ? Promise.resolve(queue.shift()) : new Promise((receive) => { pending = receive }),
+          nextFrame,
+          next: async () => (await nextFrame()).data,
           close: () => request.destroy(),
         })
       })
@@ -221,6 +226,58 @@ test('streams a complete snapshot larger than the socket high-water mark', { tim
   const stream = await app.stream(`${path}/stream`)
   t.after(() => stream.close())
   assert.deepEqual(await stream.next(), saved.data)
+})
+
+test('assigned participants send role SOS only to organizers without changing the event', { timeout: 3500 }, async (t) => {
+  let clock = Date.now()
+  t.mock.method(Date, 'now', () => clock)
+  const app = await fixture(t)
+  const event = await createEvent(app)
+  const path = `/events/${event.id}`
+  const other = await app.request('/admin/events', { method: 'POST', admin: true, body: { title: 'Другая регата', date: '' } })
+  const otherPath = `/events/${other.data.id}`
+  const organizer = await app.stream(`${path}/stream`, { admin: true })
+  const guest = await app.stream(`${path}/stream`)
+  const otherOrganizer = await app.stream(`${otherPath}/stream`, { admin: true })
+  for (const stream of [organizer, guest, otherOrganizer]) t.after(() => stream.close())
+  assert.deepEqual(await organizer.next(), event)
+  assert.deepEqual(await guest.next(), event)
+  assert.deepEqual(await otherOrganizer.next(), other.data)
+
+  const send = (assignee, roleId = 'role-a', options = {}) => app.request(`${path}/roles/${roleId}/sos`, {
+    method: 'POST', body: { assignee }, fetchSite: 'same-origin', ...options,
+  })
+  assert.equal((await send()).status, 403)
+  assert.equal((await send('@stranger', 'role-a', { admin: true })).status, 403)
+  assert.equal((await send('bad handle')).status, 400)
+  assert.equal((await send('@volunteer', 'shared')).status, 404)
+  assert.equal((await send('@volunteer', 'role-a', { fetchSite: 'cross-site' })).status, 403)
+
+  const message = (assignee) => ({
+    name: 'sos', data: { roleId: 'role-a', roleTitle: event.roles[0].title, assignee },
+  })
+  const sent = await send(' Organizer ')
+  assert.equal(sent.status, 200)
+  assert.deepEqual(sent.data, { sent: true })
+  assert.deepEqual(await organizer.nextFrame(), message('@organizer'))
+  const duplicate = await send('@organizer')
+  assert.equal(duplicate.status, 429)
+  assert.equal(duplicate.headers['retry-after'], '10')
+  assert.equal((await send('@volunteer')).status, 200)
+  assert.deepEqual(await organizer.nextFrame(), message('@volunteer'))
+  clock += 10_000
+  assert.equal((await send('@organizer')).status, 200)
+  assert.deepEqual(await organizer.nextFrame(), message('@organizer'))
+  assert.deepEqual((await app.request(path)).data, event)
+
+  const reconnect = await app.stream(`${path}/stream`, { admin: true })
+  t.after(() => reconnect.close())
+  assert.deepEqual(await reconnect.nextFrame(), { name: 'message', data: event })
+  const updated = await app.request(`/admin${path}`, { method: 'PUT', admin: true, body: { ...event, title: 'Уточнённое название' } })
+  const otherUpdated = await app.request(`/admin${otherPath}`, { method: 'PUT', admin: true, body: { ...other.data, title: 'Другая регата 2' } })
+  assert.deepEqual(await guest.nextFrame(), { name: 'message', data: updated.data })
+  assert.deepEqual(await reconnect.nextFrame(), { name: 'message', data: updated.data })
+  assert.deepEqual(await otherOrganizer.nextFrame(), { name: 'message', data: otherUpdated.data })
 })
 
 test('migrates existing events and persists a public cover independently of draft revisions', async (t) => {

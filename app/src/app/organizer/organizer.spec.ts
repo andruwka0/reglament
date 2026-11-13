@@ -7,6 +7,67 @@ import { Organizer } from './organizer';
 import { TrackerApi } from '../tracker-api';
 
 describe('Organizer', () => {
+  it('keeps legacy task state until the completion checkbox changes', async () => {
+    const queryParamMap = convertToParamMap({});
+    const stored: TrackerEvent = {
+      id: 'test', revision: 1, title: 'Турнир', date: '', location: '', description: '',
+      info: [], timeline: [], roles: [],
+      tasks: [{
+        id: 'first', title: 'Встретить гостей', description: '',
+        start: '', end: '', assignee: '', status: 'doing',
+      }],
+    };
+    const save = vi.fn((event: TrackerEvent) => of({ ...event, revision: event.revision + 1 }));
+    TestBed.configureTestingModule({
+      imports: [Organizer],
+      providers: [
+        provideRouter([]),
+        { provide: ActivatedRoute, useValue: { snapshot: { queryParamMap }, queryParamMap: of(queryParamMap) } },
+        { provide: TrackerApi, useValue: {
+          session: () => of({ authenticated: true }),
+          catalog: () => of({ events: [stored], templates: [] }),
+          saveEvent: save,
+        } },
+      ],
+    });
+    const fixture = TestBed.createComponent(Organizer);
+    await fixture.whenStable();
+    const page: HTMLElement = fixture.nativeElement;
+    const button = (name: string) => [...page.querySelectorAll('button')]
+      .find((element) => element.textContent?.trim() === name)!;
+    button('Редактировать').click();
+    await fixture.whenStable();
+    button('Общие задачи').click();
+    await fixture.whenStable();
+
+    const fields = page.querySelector<HTMLElement>('.edit-block')!;
+    const complete = fields.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(complete.checked).toBe(false);
+    expect(fields.querySelector('select')).toBeNull();
+    const title = fields.querySelector<HTMLInputElement>('input')!;
+    title.value = 'Встретить команду';
+    title.dispatchEvent(new Event('input'));
+    await fixture.whenStable();
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(save.mock.calls[0][0].tasks[0].status).toBe('doing');
+
+    button('Общие задачи').click();
+    await fixture.whenStable();
+    page.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
+    await fixture.whenStable();
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(save.mock.calls[1][0].tasks[0].status).toBe('done');
+    expect(page.querySelector<HTMLInputElement>('input[type=checkbox]')!.checked).toBe(true);
+
+    page.querySelector<HTMLInputElement>('input[type=checkbox]')!.click();
+    await fixture.whenStable();
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(save.mock.calls[2][0].tasks[0].status).toBe('todo');
+  });
+
   it.each([
     ['/e/another-event', true],
     ['//example.org/e/regata-demo', false],

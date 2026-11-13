@@ -196,20 +196,22 @@
     </button>
   </nav>
 
-  @if (organizerSession.authenticated() && helpAlerts().length) {
-    <section class="help-alerts" aria-label="Запросы помощи">
-      @for (alert of helpAlerts(); track alert.taskId) {
-        <article class="help-alert">
+  @if (organizerSession.authenticated() && alerts().length) {
+    <section class="help-alerts" aria-label="Уведомления организатора">
+      @for (alert of alerts(); track alert.key) {
+        <article class="help-alert" [attr.data-kind]="alert.kind">
           <div class="help-alert-copy" role="alert">
-            <strong class="help-alert-heading">Нужна помощь</strong>
-            <p>{{ alert.title }}</p>
-            <span>{{ alert.group }}</span>
+            <strong class="help-alert-heading">{{
+              alert.kind === 'sos' ? 'Нужна помощь' : 'Пост готов'
+            }}</strong>
+            <p>{{ alert.role }}</p>
+            <span>{{ alert.detail }}</span>
           </div>
           <button
             type="button"
             class="help-alert-close icon-button"
-            [attr.aria-label]="'Закрыть уведомление: ' + alert.title"
-            (click)="dismissHelpAlert(alert.taskId)"
+            [attr.aria-label]="'Закрыть уведомление: ' + alert.role"
+            (click)="dismissAlert(alert.key)"
           >
             <svg
               viewBox="0 0 24 24"
@@ -324,10 +326,6 @@
                         <span class="post-card-label">Ваш пост</span>
                       }
                     </span>
-                    @let state = postStatus(post.tasks);
-                    <span class="post-card-status" [attr.data-status]="state">{{
-                      statusLabel(state)
-                    }}</span>
                     <span class="post-card-progress-row">
                       <span class="post-card-progress" aria-hidden="true">
                         <span
@@ -369,6 +367,7 @@
             } @else {
               <p class="post-empty">У этого поста пока нет задач.</p>
             }
+            <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: post.id }" />
           </section>
         }
       </section>
@@ -455,6 +454,7 @@
                 <li class="task-row muted">Задач пока нет.</li>
               }
             </ul>
+            <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: role.id }" />
           </section>
         } @empty {
           @if (personFilter()) {
@@ -597,14 +597,6 @@
                   }}</a>
                   <p>{{ member.roles.join(', ') }}</p>
                 </div>
-                <button
-                  type="button"
-                  class="button secondary"
-                  [attr.aria-label]="'Задачи ' + member.person"
-                  (click)="showPersonTasks(member.person)"
-                >
-                  Задачи
-                </button>
               </li>
             }
           </ul>
@@ -745,33 +737,27 @@
 
 <ng-template #taskRow let-task let-quick="quick">
   @let editable = editableTaskIds().has(task.id);
-  <li class="task-row" [attr.data-task-status]="task.status">
-    @if (quick && editable) {
+  @let done = task.status === 'done';
+  <li class="task-row" [attr.data-task-status]="done ? 'done' : 'todo'">
+    @if (editable) {
       <button
         type="button"
         class="task-check"
-        [attr.aria-pressed]="task.status === 'done'"
-        [attr.aria-label]="
-          (task.status === 'done' ? 'Вернуть в работу: ' : 'Отметить выполненной: ') + task.title
-        "
+        [attr.aria-pressed]="done"
+        [attr.aria-label]="'Выполнено: ' + task.title"
         [disabled]="pending().has(task.id)"
         (click)="toggleTaskDone(task)"
       >
-        <span class="task-check-box" aria-hidden="true">
-          @if (task.status === 'done') {
-            <svg
-              viewBox="0 0 20 20"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2.2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path d="m4 10 4 4 8-8" />
-            </svg>
-          }
-        </span>
+        <ng-container *ngTemplateOutlet="checkIcon; context: { $implicit: done }" />
       </button>
+    } @else {
+      <span
+        class="task-check task-check-readonly"
+        role="img"
+        [attr.aria-label]="done ? 'Выполнено' : 'Не выполнено'"
+      >
+        <ng-container *ngTemplateOutlet="checkIcon; context: { $implicit: done }" />
+      </span>
     }
     <div class="task-main">
       <h3>{{ task.title }}</h3>
@@ -779,39 +765,56 @@
         <p>{{ task.description }}</p>
       }
     </div>
-    <div class="task-side">
-      @if (task.start || task.end) {
+    @if (task.start || task.end) {
+      <div class="task-side">
         <span class="task-time">{{ formatTime(task.start, task.end) }}</span>
-      }
-      @if (editable) {
-        <div class="status-control" [attr.data-status]="task.status">
-          <select
-            class="status"
-            [attr.data-status]="task.status"
-            [attr.aria-label]="'Статус задачи «' + task.title + '»'"
-            [disabled]="pending().has(task.id)"
-            #statusControl
-            (change)="updateTask(task, statusControl)"
-          >
-            @for (option of statuses; track option.id) {
-              <option [value]="option.id" [selected]="option.id === task.status">
-                {{ option.label }}
-              </option>
-            }
-          </select>
-        </div>
-      } @else {
-        <span class="task-status-readonly" [attr.data-status]="task.status">
-          {{ statusLabel(task.status) }}
-        </span>
-      }
-    </div>
+      </div>
+    }
     @if (people(task).length && (!quick || !personFilter() || people(task).length > 1)) {
       <div class="responsibles task-responsibles">
         <ng-container *ngTemplateOutlet="responsibles; context: { $implicit: people(task) }" />
       </div>
     }
   </li>
+</ng-template>
+
+<ng-template #checkIcon let-done>
+  <span class="task-check-box" aria-hidden="true">
+    @if (done) {
+      <svg
+        viewBox="0 0 20 20"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="m4 10 4 4 8-8" />
+      </svg>
+    }
+  </span>
+</ng-template>
+
+<ng-template #sosControl let-roleId>
+  @if (ownRoleIds().has(roleId)) {
+    @let key = sosKey(roleId);
+    <div class="post-sos">
+      <button
+        class="button sos-button"
+        type="button"
+        [disabled]="sosPending().has(key)"
+        aria-label="SOS: запросить помощь"
+        (click)="requestSos(roleId)"
+      >
+        SOS
+      </button>
+      @if (sosFeedback().get(key); as feedback) {
+        <p class="sos-feedback" [attr.data-error]="feedback.error" role="status">
+          {{ feedback.text }}
+        </p>
+      }
+    </div>
+  }
 </ng-template>
 
 <ng-template #responsibles let-handles>

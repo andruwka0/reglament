@@ -13,6 +13,7 @@ const tokenPattern = /^[A-Za-z0-9_-]{43}$/
 const cookieName = 'regatta_session'
 const sessionDuration = 12 * 60 * 60 * 1000
 const loginWindow = 15 * 60 * 1000
+const sosCooldownMs = 10_000
 const maxBodyBytes = 512 * 1024
 const maxCoverBytes = 1024 * 1024
 const maxListLength = 150
@@ -514,6 +515,7 @@ export function createTrackerServer({
   const sessions = new Map()
   const loginAttempts = new Map()
   const eventStreams = new Map()
+  const recentSos = new Map()
 
   function writeStream(response, data) {
     if (response.destroyed || response.writableEnded) return
@@ -521,7 +523,7 @@ export function createTrackerServer({
     else response.write(data)
   }
 
-  function streamEvent(id, response) {
+  function streamEvent(id, cookie, response) {
     const event = store.getEvent(id)
     if (eventStreams.size >= maxEventStreams) {
       throw new RequestError(503, 'Слишком много подключений. Обновления продолжат загружаться автоматически.')
@@ -531,23 +533,51 @@ export function createTrackerServer({
       'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     })
-    eventStreams.set(response, id)
+    eventStreams.set(response, { id, cookie })
     response.once('close', () => eventStreams.delete(response))
     writeStream(response, `retry: 3000\ndata: ${JSON.stringify(event)}\n\n`)
   }
 
-  function publishEvent(response, event) {
-    writeJson(response, 200, event)
+  function broadcast(eventId, data, name) {
     let frame
-    for (const [stream, id] of eventStreams) {
-      if (id !== event.id) continue
-      frame ??= `data: ${JSON.stringify(event)}\n\n`
+    for (const [stream, { id, cookie }] of eventStreams) {
+      if (id !== eventId || (name === 'sos' && !authenticated(cookie))) continue
+      frame ??= `${name ? `event: ${name}\n` : ''}data: ${JSON.stringify(data)}\n\n`
       writeStream(stream, frame)
     }
   }
 
+  function publishEvent(response, event) {
+    writeJson(response, 200, event)
+    broadcast(event.id, event)
+  }
+
+  async function sendSos(eventId, roleId, request, response) {
+    const body = await readBody(request)
+    const role = store.getEvent(eventId).roles.find((item) => item.id === roleId)
+    if (!role) throw new RequestError(404, 'Роль не найдена.')
+    const assignee = person(body.assignee ?? '')
+    if (!assignee) throw new RequestError(403, 'Выберите участника в Telegram, чтобы отправить SOS.')
+    if (!role.assignees.includes(assignee) && !role.tasks.some((task) => task.assignees.includes(assignee))) {
+      throw new RequestError(403, 'Эта роль не назначена выбранному участнику.')
+    }
+
+    const key = `${eventId}/${roleId}/${assignee}`
+    const now = Date.now()
+    const expires = recentSos.get(key)
+    if (expires > now) {
+      response.setHeader('Retry-After', Math.ceil((expires - now) / 1000))
+      throw new RequestError(429, 'SOS уже отправлен. Подождите перед повтором.')
+    }
+    recentSos.set(key, now + sosCooldownMs)
+    broadcast(eventId, { roleId, roleTitle: role.title, assignee }, 'sos')
+    return writeJson(response, 200, { sent: true })
+  }
+
   const heartbeat = setInterval(() => {
     for (const stream of eventStreams.keys()) writeStream(stream, ': heartbeat\n\n')
+    const now = Date.now()
+    for (const [key, expires] of recentSos) if (expires <= now) recentSos.delete(key)
   }, streamHeartbeatMs)
   heartbeat.unref()
 
@@ -644,12 +674,16 @@ export function createTrackerServer({
         if (!action && method === 'PUT') return publishEvent(response, store.updateEvent(id, await readBody(request)))
       }
     }
+    const roleSos = path.match(/^\/api\/events\/([^/]+)\/roles\/([^/]+)\/sos$/)
+    if (roleSos && method === 'POST') {
+      return sendSos(identifier(roleSos[1]), identifier(roleSos[2]), request, response)
+    }
     const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|tasks\/([^/]+)\/status))?$/)
     if (publicEvent) {
       const [, rawEventId, action, taskId] = publicEvent
       const eventId = identifier(rawEventId)
       if (!action && method === 'GET') return writeJson(response, 200, store.getEvent(eventId))
-      if (action === 'stream' && method === 'GET') return streamEvent(eventId, response)
+      if (action === 'stream' && method === 'GET') return streamEvent(eventId, cookie, response)
       if (action === 'cover' && method === 'GET') {
         const { mime, bytes } = store.getCover(eventId)
         response.writeHead(200, { 'Content-Type': mime, 'Content-Length': bytes.length, 'Cache-Control': 'no-store' })

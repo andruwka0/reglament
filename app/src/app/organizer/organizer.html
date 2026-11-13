@@ -110,18 +110,19 @@
             <button class="button secondary" type="button" (click)="addTime()">Добавить событие</button>
           }
           @case ('roles') {
-            @for (role of editForm.roles; track role().value().id) {
-              @let roleId = role().value().id;
+            @for (roleValue of draft().roles; track roleValue.id) {
+              @let role = editForm.roles[$index];
+              @let roleId = roleValue.id;
               <details class="edit-block" [open]="$first || addedRoleId() === roleId">
-                <summary>{{ role().value().title || 'Новая роль' }}</summary>
+                <summary>{{ roleValue.title || 'Новая роль' }}</summary>
                 <div class="form-grid">
                   <label class="field">Название роли <input [formField]="role.title"></label>
                   <label class="field">Ответственные за роль <input [formField]="role.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false"></label>
                   <label class="field wide">Описание роли <textarea rows="2" [formField]="role.description"></textarea></label>
                 </div>
                 <h3>Задачи роли</h3>
-                @for (task of role.tasks; track task().value().id) {
-                  <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: task, roleId }"></ng-container>
+                @for (task of roleValue.tasks; track task.id) {
+                  <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: role.tasks[$index], roleId, taskId: task.id }"></ng-container>
                 }
                 <div class="inline-actions">
                   <button class="button secondary" type="button" (click)="addTask(roleId)">Добавить задачу</button>
@@ -134,8 +135,8 @@
             <button class="button secondary" type="button" (click)="addRole()">Добавить роль</button>
           }
           @case ('tasks') {
-            @for (task of editForm.tasks; track task().value().id) {
-              <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: task }"></ng-container>
+            @for (task of draft().tasks; track task.id) {
+              <ng-container [ngTemplateOutlet]="taskFields" [ngTemplateOutletContext]="{ $implicit: editForm.tasks[$index], taskId: task.id }"></ng-container>
             } @empty {
               <p class="empty-state">Добавьте задачи для всего мероприятия.</p>
             }
@@ -143,7 +144,7 @@
           }
           @case ('links') {
             <h3>Общая ссылка для команды</h3>
-            <p class="muted">По ссылке виден весь план мероприятия. Чтобы менять статусы своих задач, участник выбирает свой Telegram-ник.</p>
+            <p class="muted">По ссылке виден весь план мероприятия. Чтобы отмечать выполнение своих задач, участник выбирает свой Telegram-ник.</p>
             <div class="inline-actions link-row">
               <input #publicUrl aria-label="Общая ссылка для команды" readonly [value]="publicLink(saved.id)">
               <button class="button secondary" type="button" (click)="copy(publicUrl.value, publicUrl)">Копировать</button>
@@ -261,7 +262,7 @@
   </form>
 </dialog>
 
-<ng-template #taskFields let-task let-roleId="roleId">
+<ng-template #taskFields let-task let-roleId="roleId" let-taskId="taskId">
   <div class="edit-block form-grid">
     <label class="field wide">Задача <input [formField]="task.title"></label>
     <label class="field wide">Подробности <textarea rows="2" [formField]="task.description"></textarea></label>
@@ -271,11 +272,11 @@
       <input [formField]="task.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false">
       @if (roleId) { <span class="muted">Пустое поле использует ответственных за роль.</span> }
     </label>
-    <label class="field">Статус
-      <select [formField]="task.status">
-        @for (status of statuses; track status.id) { <option [value]="status.id">{{ status.label }}</option> }
-      </select>
+    <label class="inline-actions">
+      <input #completed type="checkbox" [checked]="task.status().value() === 'done'"
+        (change)="task.status().value.set(completed.checked ? 'done' : 'todo')">
+      Выполнено
     </label>
-    <button class="button danger" type="button" (click)="removeTask(task().value().id, roleId)">Удалить задачу</button>
+    <button class="button danger" type="button" (click)="removeTask(taskId, roleId)">Удалить задачу</button>
   </div>
 </ng-template>

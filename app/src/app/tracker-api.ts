@@ -3,6 +3,12 @@ import { Service, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import type { Catalog, Event, Status, Template } from './event.model';
 
+export interface RoleSos {
+  roleId: string;
+  roleTitle: string;
+  assignee: string;
+}
+
 @Service()
 export class TrackerApi {
   private readonly http = inject(HttpClient);
@@ -11,7 +17,7 @@ export class TrackerApi {
     return this.http.get<Event>(this.eventPath(id));
   }
 
-  liveEvent(id: string): Observable<Event> {
+  liveEvent(id: string, onSos: (request: RoleSos) => void = () => {}): Observable<Event> {
     return new Observable((subscriber) => {
       if (typeof EventSource === 'undefined') {
         subscriber.complete();
@@ -25,7 +31,23 @@ export class TrackerApi {
         } catch {
           return;
         }
-        if (snapshot?.id === id && Number.isSafeInteger(snapshot.revision)) subscriber.next(snapshot);
+        if (snapshot?.id === id && Number.isSafeInteger(snapshot.revision))
+          subscriber.next(snapshot);
+      });
+      source.addEventListener('sos', (message) => {
+        let request: RoleSos | null;
+        try {
+          request = JSON.parse((message as MessageEvent<string>).data);
+        } catch {
+          return;
+        }
+        if (
+          typeof request?.roleId === 'string' &&
+          typeof request.roleTitle === 'string' &&
+          typeof request.assignee === 'string'
+        ) {
+          onSos(request);
+        }
       });
       return () => source.close();
     });
@@ -34,6 +56,11 @@ export class TrackerApi {
   updateStatus(id: string, taskId: string, status: Status, assignee: string) {
     const path = this.eventPath(id) + '/tasks/' + encodeURIComponent(taskId) + '/status';
     return this.http.post<Event>(path, { status, assignee });
+  }
+
+  requestSos(id: string, roleId: string, assignee: string) {
+    const path = this.eventPath(id) + '/roles/' + encodeURIComponent(roleId) + '/sos';
+    return this.http.post<{ sent: true }>(path, { assignee });
   }
 
   session() {

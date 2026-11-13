@@ -11,7 +11,7 @@ import {
   signal,
   viewChild,
 } from '@angular/core';
-import { takeUntilDestroyed } from '@angular/core/rxjs-interop';
+import { takeUntilDestroyed, toObservable } from '@angular/core/rxjs-interop';
 import { ActivatedRoute } from '@angular/router';
 import {
   EMPTY,
@@ -25,16 +25,16 @@ import {
   switchMap,
   tap,
 } from 'rxjs';
-import { eventCoverUrl, STATUSES } from '../event.model';
-import type { Event, Status, Task } from '../event.model';
+import { eventCoverUrl } from '../event.model';
+import type { Event, Task } from '../event.model';
 import { OrganizerSession } from '../organizer-session';
-import { TrackerApi, errorMessage } from '../tracker-api';
+import { TrackerApi, errorMessage, type RoleSos } from '../tracker-api';
 import { buildLivePlan, groupPlanTasks, type LiveState } from './live-plan';
 import { assignedPeople, buildPosts, COMMON_POST_ID, taskAssignedTo } from './post-view';
 
 type BoardPage = 'tasks' | 'plan' | 'team' | 'important';
-type HelpAlert = { taskId: string; title: string; group: string };
-const helpAlertDurationMs = 5 * 60_000;
+type BoardAlert = { key: string; kind: 'sos' | 'complete'; role: string; detail: string };
+const alertDurationMs = { sos: 5 * 60_000, complete: 3 * 60_000 };
 
 const planLabels = {
   past: 'Прошло',
@@ -67,8 +67,10 @@ export class EventBoard {
   private readonly injector = inject(Injector);
   private readonly carousel = viewChild<ElementRef<HTMLElement>>('postCarousel');
   private readonly importantHeading = viewChild<ElementRef<HTMLHeadingElement>>('importantHeading');
-  private readonly helpTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  protected readonly helpAlerts = signal<HelpAlert[]>([]);
+  private readonly alertTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  protected readonly alerts = signal<BoardAlert[]>([]);
+  protected readonly sosPending = signal(new Map<string, symbol>());
+  protected readonly sosFeedback = signal(new Map<string, { text: string; error: boolean }>());
   private postScrollTimer?: ReturnType<typeof setTimeout>;
   private readonly selectedPostId = signal('');
   protected readonly mobile = signal(window.matchMedia?.('(max-width: 800px)').matches ?? false);
@@ -94,13 +96,22 @@ export class EventBoard {
   protected readonly loadingError = signal('');
   protected readonly saveError = signal('');
   protected readonly pending = signal(new Map<string, symbol>());
-  protected readonly statuses = STATUSES;
   protected readonly posts = computed(() => {
     const event = this.event();
     return event ? buildPosts(event, this.personFilter()) : [];
   });
   protected readonly activePost = computed(
     () => this.posts().find((post) => post.id === this.selectedPostId()) ?? this.posts()[0],
+  );
+  protected readonly ownRoleIds = computed(
+    () =>
+      new Set(
+        this.personFilter()
+          ? this.posts()
+              .map((post) => post.id)
+              .filter((id) => id !== COMMON_POST_ID)
+          : [],
+      ),
   );
   private readonly tasks = computed(() => {
     const event = this.event();
@@ -145,7 +156,7 @@ export class EventBoard {
         const tasks = role.tasks.filter((task) => taskAssignedTo(task, inherited, person));
         return { ...role, tasks };
       })
-      .filter((role) => role.tasks.length > 0);
+      .filter((role) => role.tasks.length > 0 || this.ownRoleIds().has(role.id));
   });
   protected readonly editableTaskIds = computed(() => {
     if (!this.personFilter()) return new Set<string>();
@@ -185,11 +196,12 @@ export class EventBoard {
   constructor() {
     this.destroyRef.onDestroy(() => {
       clearTimeout(this.postScrollTimer);
-      this.clearHelpAlerts();
+      this.clearAlerts();
     });
     effect(() => {
-      if (!this.organizerSession.authenticated()) this.clearHelpAlerts();
+      if (!this.organizerSession.authenticated()) this.clearAlerts();
     });
+    const authentication = toObservable(computed(() => this.organizerSession.authenticated()));
     interval(1000)
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe(() => this.refreshClock());
@@ -199,11 +211,13 @@ export class EventBoard {
         map((params) => params.get('id') ?? ''),
         distinctUntilChanged(),
         tap(() => {
-          this.clearHelpAlerts();
+          this.clearAlerts();
           this.event.set(null);
           this.loadingError.set('');
           this.saveError.set('');
           this.pending.set(new Map());
+          this.sosPending.set(new Map());
+          this.sosFeedback.set(new Map());
           this.page.set('tasks');
           this.resetTaskFilters();
         }),
@@ -220,7 +234,9 @@ export class EventBoard {
                 ),
               ),
             ),
-            this.api.liveEvent(id),
+            authentication.pipe(
+              switchMap(() => this.api.liveEvent(id, (request) => this.showSos(request))),
+            ),
           ),
         ),
         takeUntilDestroyed(this.destroyRef),
@@ -254,11 +270,6 @@ export class EventBoard {
     afterNextRender(() => this.importantHeading()?.nativeElement.focus({ preventScroll: true }), {
       injector: this.injector,
     });
-  }
-
-  protected showPersonTasks(person: string) {
-    this.choosePerson(person);
-    this.changePage('tasks');
   }
 
   protected choosePerson(person: string) {
@@ -327,29 +338,11 @@ export class EventBoard {
     this.choosePerson('');
   }
 
-  protected updateTask(task: Task, control: HTMLSelectElement): void {
-    const status = this.statuses.find((option) => option.id === control.value)?.id;
-    control.value = task.status;
-    if (status) this.saveTaskStatus(task, status);
-  }
-
   protected toggleTaskDone(task: Task): void {
     this.saveTaskStatus(task, task.status === 'done' ? 'todo' : 'done');
   }
 
-  protected postStatus(tasks: readonly Task[]): Status {
-    if (tasks.some((task) => task.status === 'blocked')) return 'blocked';
-    if (tasks.length && tasks.every((task) => task.status === 'done')) return 'done';
-    return tasks.some((task) => task.status === 'doing' || task.status === 'done')
-      ? 'doing'
-      : 'todo';
-  }
-
-  protected statusLabel(status: Status): string {
-    return STATUSES.find((option) => option.id === status)?.label ?? '';
-  }
-
-  private saveTaskStatus(task: Task, status: Status): void {
+  private saveTaskStatus(task: Task, status: 'todo' | 'done'): void {
     const event = this.event();
     const assignee = this.personFilter();
     if (
@@ -376,6 +369,40 @@ export class EventBoard {
           this.saveError.set(errorMessage(error));
         },
       });
+  }
+
+  protected requestSos(roleId: string): void {
+    const event = this.event();
+    const assignee = this.personFilter();
+    const key = this.sosKey(roleId);
+    if (!event || !this.ownRoleIds().has(roleId) || this.sosPending().has(key)) return;
+
+    const request = Symbol();
+    this.sosPending.update((pending) => new Map(pending).set(key, request));
+    this.sosFeedback.update((feedback) => {
+      const next = new Map(feedback);
+      next.delete(key);
+      return next;
+    });
+    this.api
+      .requestSos(event.id, roleId, assignee)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe({
+        next: () => this.finishSos(key, request, 'Запрос помощи отправлен.', false),
+        error: (error: unknown) => this.finishSos(key, request, errorMessage(error), true),
+      });
+  }
+
+  protected sosKey(roleId: string): string {
+    return JSON.stringify([roleId, this.personFilter()]);
+  }
+
+  private finishSos(key: string, request: symbol, text: string, error: boolean): void {
+    const pending = new Map(this.sosPending());
+    if (pending.get(key) !== request) return;
+    pending.delete(key);
+    this.sosPending.set(pending);
+    this.sosFeedback.update((feedback) => new Map(feedback).set(key, { text, error }));
   }
 
   protected formatDate(date: string): string {
@@ -412,40 +439,57 @@ export class EventBoard {
     return 'https://t.me/' + assignee.slice(1);
   }
 
-  protected dismissHelpAlert(taskId: string) {
-    clearTimeout(this.helpTimers.get(taskId));
-    this.helpTimers.delete(taskId);
-    this.helpAlerts.update((alerts) => alerts.filter((alert) => alert.taskId !== taskId));
+  protected dismissAlert(key: string) {
+    clearTimeout(this.alertTimers.get(key));
+    this.alertTimers.delete(key);
+    this.alerts.update((alerts) => alerts.filter((alert) => alert.key !== key));
   }
 
-  private clearHelpAlerts() {
-    for (const timer of this.helpTimers.values()) clearTimeout(timer);
-    this.helpTimers.clear();
-    this.helpAlerts.set([]);
+  private clearAlerts() {
+    for (const timer of this.alertTimers.values()) clearTimeout(timer);
+    this.alertTimers.clear();
+    this.alerts.set([]);
   }
 
-  private notifyHelp(previous: Event, next: Event) {
+  private showAlert(alert: BoardAlert) {
     if (!this.organizerSession.authenticated()) return;
-    const alreadyBlocked = new Set(
-      [previous.tasks, ...previous.roles.map((role) => role.tasks)]
-        .flat()
-        .filter((task) => task.status === 'blocked')
-        .map((task) => task.id),
+    this.dismissAlert(alert.key);
+    this.alerts.update((alerts) => [alert, ...alerts]);
+    this.alertTimers.set(
+      alert.key,
+      setTimeout(() => this.dismissAlert(alert.key), alertDurationMs[alert.kind]),
     );
-    const groups = [...next.roles, { title: 'Общие задачи', tasks: next.tasks }];
-    for (const group of groups) {
-      for (const task of group.tasks) {
-        if (task.status !== 'blocked' || alreadyBlocked.has(task.id)) continue;
-        this.dismissHelpAlert(task.id);
-        this.helpAlerts.update((alerts) => [
-          { taskId: task.id, title: task.title, group: group.title },
-          ...alerts,
-        ]);
-        this.helpTimers.set(
-          task.id,
-          setTimeout(() => this.dismissHelpAlert(task.id), helpAlertDurationMs),
-        );
-      }
+  }
+
+  private showSos(request: RoleSos) {
+    this.showAlert({
+      key: JSON.stringify(['sos', request.roleId, request.assignee]),
+      kind: 'sos',
+      role: request.roleTitle,
+      detail: request.assignee,
+    });
+  }
+
+  private notifyCompletedRoles(previous: Event, next: Event) {
+    if (!this.organizerSession.authenticated()) return;
+    const incompleteRoles = new Set(
+      previous.roles
+        .filter((role) => role.tasks.some((task) => task.status !== 'done'))
+        .map((role) => role.id),
+    );
+    for (const role of next.roles) {
+      if (
+        !incompleteRoles.has(role.id) ||
+        !role.tasks.length ||
+        role.tasks.some((task) => task.status !== 'done')
+      )
+        continue;
+      this.showAlert({
+        key: `complete:${role.id}`,
+        kind: 'complete',
+        role: role.title,
+        detail: 'Все задачи выполнены',
+      });
     }
   }
 
@@ -489,7 +533,7 @@ export class EventBoard {
     this.event.set(
       current && !fromRefresh ? { ...next, coverVersion: current.coverVersion } : next,
     );
-    if (current) this.notifyHelp(current, next);
+    if (current) this.notifyCompletedRoles(current, next);
     if (!current) this.restorePerson(next);
     if (this.roleFilter() && !next.roles.some((role) => role.id === this.roleFilter())) {
       this.roleFilter.set('');

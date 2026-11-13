@@ -7,7 +7,7 @@ import { firstValueFrom, map } from 'rxjs';
 import { errorMessage, TrackerApi } from '../tracker-api';
 import { formatCoverImage } from '../cover-image';
 import { OrganizerSession } from '../organizer-session';
-import { eventCoverUrl, STATUSES, type Catalog, type Event, type EventInfo, type Task, type Template } from '../event.model';
+import { eventCoverUrl, type Catalog, type Event, type EventInfo, type Task, type Template } from '../event.model';
 
 const emptyEvent: EditableEvent = {
   id: '', revision: 0, title: '', date: '', location: '', description: '',
@@ -130,7 +130,6 @@ export class Organizer {
   protected readonly section = signal<Section>('intro');
   protected readonly addedRoleId = signal('');
   protected readonly sections = sections;
-  protected readonly statuses = STATUSES;
   protected readonly saving = signal(false);
   protected readonly error = signal('');
   protected readonly feedback = signal('');
