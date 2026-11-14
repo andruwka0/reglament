@@ -1,0 +1,163 @@
+:host {
+  display: block;
+  min-width: 0;
+}
+.point-workflow {
+  display: grid;
+  min-width: 0;
+  gap: 12px;
+  margin: 8px 14px 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: var(--tinted-paper);
+  overflow-wrap: anywhere;
+}
+.point-overview {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+.point-overview strong {
+  font-size: 14px;
+}
+.point-state,
+.point-actor {
+  width: max-content;
+  max-width: 100%;
+  padding: 3px 8px;
+  border-radius: var(--pill);
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 680;
+  line-height: 1.35;
+}
+.point-actor {
+  margin-inline-start: auto;
+  background: var(--accent-bright);
+  color: var(--tab-active-ink);
+}
+.point-state[data-state='ready'],
+.point-state[data-state='finished'] {
+  background: #e5f4eb;
+  color: #236241;
+}
+.point-state[data-state='paused'] {
+  background: #ffe9b7;
+  color: #633e1b;
+}
+.point-group {
+  display: grid;
+  min-width: 0;
+  gap: 7px;
+}
+.point-group h3,
+.point-message strong {
+  font-size: 13px;
+}
+.point-form {
+  display: flex;
+  min-width: 0;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.point-form .field {
+  min-width: min(100%, 150px);
+  flex: 1;
+}
+.point-form .full {
+  min-width: 100%;
+}
+.point-form textarea {
+  width: 100%;
+  min-height: 68px;
+}
+.point-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.point-list {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.point-message {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--paper);
+}
+.point-message-title {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+}
+.point-message-title span,
+.point-contact {
+  color: var(--muted);
+  font-size: 12px;
+}
+.point-body {
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.point-message summary,
+.point-compose summary {
+  display: list-item;
+  min-height: 44px;
+  align-content: center;
+  cursor: pointer;
+}
+.point-compose summary {
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 700;
+}
+.point-compose form {
+  margin-top: 5px;
+}
+.point-message summary span {
+  margin-inline-start: 7px;
+}
+.point-thread {
+  margin-top: 5px;
+}
+.point-thread-messages > li {
+  padding-block: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.point-sos {
+  min-width: 64px;
+  min-height: 48px;
+  border-color: #a65c39;
+  background: #fce9dd;
+  color: #743318;
+  font-size: 14px;
+}
+.point-sos:hover:not(:disabled) {
+  border-color: #a65c39;
+  background: #f7d5bf;
+}
+@media (max-width: 800px) {
+  .point-workflow {
+    margin-inline: 10px;
+    padding: 9px 10px;
+  }
+  .point-actor {
+    margin-inline-start: 0;
+  }
+}

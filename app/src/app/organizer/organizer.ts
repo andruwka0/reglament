@@ -3,11 +3,13 @@ import { Component, computed, inject, signal, viewChild, ElementRef } from '@ang
 import { FormField, applyEach, form, maxLength, readonly, required, validate } from '@angular/forms/signals';
 import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { rxResource, toSignal } from '@angular/core/rxjs-interop';
-import { firstValueFrom, map } from 'rxjs';
+import { catchError, EMPTY, exhaustMap, firstValueFrom, interval, map, startWith } from 'rxjs';
 import { errorMessage, TrackerApi } from '../tracker-api';
 import { formatCoverImage } from '../cover-image';
 import { OrganizerSession } from '../organizer-session';
 import { eventCoverUrl, type Catalog, type Event, type EventInfo, type Task, type Template } from '../event.model';
+import { WorkflowAdmin } from './workflow-admin';
+import type { WorkflowAction, WorkflowView } from '../workflow.model';
 
 const emptyEvent: EditableEvent = {
   id: '', revision: 0, title: '', date: '', location: '', description: '',
@@ -36,7 +38,7 @@ function assignmentList<T extends { assignee: string }>(item: T) {
 }
 
 function toEditor(event: Event): EditableEvent {
-  const { coverVersion: _coverVersion, ...editable } = event;
+  const { coverVersion: _coverVersion, managedWorkflow: _managedWorkflow, ...editable } = event;
   return {
     ...editable,
     info: event.info.map((item) => ({ ...item, kind: item.label.trim() ? 'field' : 'text' })),
@@ -67,12 +69,13 @@ const sections = [
   { id: 'tasks', label: 'Общие задачи' },
   { id: 'links', label: 'Ссылки' },
   { id: 'notifications', label: 'Уведомления' },
+  { id: 'workflow', label: 'Рабочий режим' },
 ] as const;
 type Section = typeof sections[number]['id'];
 
 @Component({
   selector: 'app-organizer',
-  imports: [FormField, RouterLink, NgTemplateOutlet],
+  imports: [FormField, RouterLink, NgTemplateOutlet, WorkflowAdmin],
   templateUrl: './organizer.html',
 })
 export class Organizer {
@@ -136,6 +139,20 @@ export class Organizer {
       ? this.visibleEditor()?.id : undefined,
     stream: ({ params: eventId }) => this.api.telegramInfo(eventId),
   });
+  protected readonly workflow = rxResource({
+    params: () => this.authenticated() && this.section() === 'workflow' ? this.visibleEditor()?.id : undefined,
+    stream: ({ params: id }) => interval(5000).pipe(
+      startWith(0),
+      exhaustMap((tick) => tick === 0 ? this.api.workflow(id) : this.api.workflow(id).pipe(catchError(() => EMPTY))),
+      map((view) => {
+        if (!this.workflowBusy()) this.changedWorkflow.set(null);
+        return view;
+      }),
+    ),
+  });
+  protected readonly changedWorkflow = signal<{ id: string; view: WorkflowView } | null>(null);
+  protected readonly workflowBusy = signal(false);
+  protected readonly workflowError = signal('');
   protected readonly announcementLimit = 3000;
   protected readonly announcement = signal({ text: '' });
   protected readonly announcementBusy = signal(false);
@@ -396,7 +413,55 @@ export class Organizer {
   }
 
   protected selectSection(section: Section) {
+    this.changedWorkflow.set(null);
+    this.workflowError.set('');
     this.section.set(section);
+  }
+
+  protected async changeWorkflow(action: WorkflowAction) {
+    const saved = this.visibleEditor();
+    if (!saved || this.workflowBusy()) return;
+    this.workflowBusy.set(true);
+    this.workflowError.set('');
+    try {
+      const view = await firstValueFrom(this.api.applyWorkflow(saved.id, action));
+      if (this.visibleEditor()?.id !== saved.id) return;
+      this.changedWorkflow.set({ id: saved.id, view });
+      if (action.action === 'enable') {
+        this.baseline.set({ ...saved, managedWorkflow: true });
+        this.catalog.update((catalog) => ({ ...catalog, events: catalog.events.map((event) =>
+          event.id === saved.id ? { ...event, managedWorkflow: true } : event) }));
+      }
+    } catch (error) {
+      if (this.visibleEditor()?.id === saved.id) this.workflowError.set(errorMessage(error));
+    } finally {
+      this.workflowBusy.set(false);
+    }
+  }
+
+  protected async workflowTaskOverride(change: { taskId: string; completed: boolean; comment: string }) {
+    const saved = this.visibleEditor();
+    if (!saved || this.workflowBusy() || this.dirty()) return;
+    this.workflowBusy.set(true);
+    this.workflowError.set('');
+    try {
+      const updated = await firstValueFrom(this.api.overrideTask(saved.id, change.taskId, change.completed, change.comment));
+      if (this.visibleEditor()?.id !== saved.id) return;
+      this.baseline.set({ ...updated, managedWorkflow: true });
+      this.draft.set(toEditor(this.baseline()!));
+      this.catalog.update((catalog) => ({ ...catalog, events: catalog.events.map((event) =>
+        event.id === saved.id ? this.baseline()! : event) }));
+      this.refreshWorkflow();
+    } catch (error) {
+      if (this.visibleEditor()?.id === saved.id) this.workflowError.set(errorMessage(error));
+    } finally {
+      this.workflowBusy.set(false);
+    }
+  }
+
+  protected refreshWorkflow() {
+    this.changedWorkflow.set(null);
+    this.workflow.reload();
   }
 
   protected async sendAnnouncement(event: SubmitEvent) {

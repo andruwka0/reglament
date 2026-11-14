@@ -93,6 +93,16 @@ function render(
         useValue: {
           event: loadEvent,
           eventBot: () => of({ botUrl: 'https://t.me/test_bot?start=event_regatta' }),
+          workflow: () =>
+            of({
+              enabled: false,
+              actor: null,
+              points: [],
+              commands: [],
+              requests: [],
+              audit: [],
+              stages: [],
+            }),
           liveEvent: (
             _id: string,
             onSos: (request: RoleSos) => void,

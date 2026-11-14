@@ -46,7 +46,7 @@
           </button>
         }
       </nav>
-      <form class="edit-section" (submit)="section() === 'notifications' ? sendAnnouncement($event) : save($event)">
+      <form class="edit-section" (submit)="section() === 'notifications' ? sendAnnouncement($event) : section() === 'workflow' ? $event.preventDefault() : save($event)">
         @switch (section()) {
           @case ('intro') {
             <div class="form-grid">
@@ -190,8 +190,26 @@
             @if (announcementFeedback(); as message) { <p class="notice" role="status" [textContent]="message"></p> }
             @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
           }
+          @case ('workflow') {
+            @if (workflowError()) { <p class="notice error" role="alert">{{ workflowError() }}</p> }
+            @if (dirty()) {
+              <p class="notice">Сохраните изменения в редакторе, чтобы управлять точками.</p>
+              <button class="button secondary" type="button" (click)="selectSection('intro')">К настройкам мероприятия</button>
+            } @else {
+              @let changed = changedWorkflow();
+              @let view = changed?.id === saved.id ? changed?.view : workflow.hasValue() ? workflow.value() : null;
+              @if (view) {
+                <app-workflow-admin [view]="view" [event]="saved" [busy]="workflowBusy()" (action)="changeWorkflow($event)" (taskOverride)="workflowTaskOverride($event)" />
+              } @else if (workflow.isLoading()) {
+                <p class="muted" role="status">Загружаем точки…</p>
+              } @else if (workflow.error(); as problem) {
+                <p class="notice error" role="alert">{{ telegramError(problem) }}</p>
+              }
+              <button class="button ghost" type="button" [disabled]="workflowBusy()" (click)="refreshWorkflow()">Обновить рабочий режим</button>
+            }
+          }
         }
-        @if (section() !== 'notifications') {
+        @if (section() !== 'notifications' && section() !== 'workflow') {
           <div class="editor-actions inline-actions">
             <button class="button primary" type="submit" [disabled]="!dirty() || saving() || coverBusy() || editForm().invalid()">{{ saving() ? 'Сохраняем…' : 'Сохранить изменения' }}</button>
             @if (dirty()) { <span class="muted">Есть несохранённые изменения</span> }
@@ -314,11 +332,11 @@
       <input [formField]="task.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false">
       @if (roleId) { <span class="muted">Пустое поле использует ответственных за роль.</span> }
     </label>
-    <label class="inline-actions">
+    @if (!baseline()?.managedWorkflow) { <label class="inline-actions">
       <input #completed type="checkbox" [checked]="task.status().value() === 'done'"
         (change)="task.status().value.set(completed.checked ? 'done' : 'todo')">
       Выполнено
-    </label>
+    </label> }
     <button class="button danger" type="button" (click)="removeTask(taskId, roleId)">Удалить задачу</button>
   </div>
 </ng-template>

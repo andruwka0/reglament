@@ -47,7 +47,7 @@ class TelegramError extends Error {
 
 export function createTelegram({
   token, dataDir, database = join(dataDir, 'regatta.sqlite'), publicOrigin, listEvents, getEvent,
-  verifyAdminPassword = () => false, fetchImpl = fetch, idleMs = 500,
+  verifyAdminPassword = () => false, confirmBrowser = () => false, fetchImpl = fetch, idleMs = 500,
 }) {
   const origin = new URL(publicOrigin)
   if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('Некорректный публичный адрес трекера.')
@@ -70,14 +70,19 @@ export function createTelegram({
     CREATE TABLE IF NOT EXISTS telegram_outbox (
       id INTEGER PRIMARY KEY, user_id TEXT NOT NULL, chat_id TEXT NOT NULL,
       event_id TEXT, username TEXT, text TEXT NOT NULL, buttons TEXT,
-      created INTEGER NOT NULL, ready INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0
+      created INTEGER NOT NULL, ready INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+      audience TEXT NOT NULL DEFAULT 'participants'
     );
     CREATE INDEX IF NOT EXISTS telegram_outbox_ready ON telegram_outbox (ready, id);
   `)
+  if (!db.prepare('PRAGMA table_info(telegram_outbox)').all().some((column) => column.name === 'audience')) {
+    db.exec("ALTER TABLE telegram_outbox ADD COLUMN audience TEXT NOT NULL DEFAULT 'participants'")
+  }
   const state = db.prepare('SELECT value FROM telegram_state WHERE key = ?')
   const setState = db.prepare('INSERT INTO telegram_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
   const contact = db.prepare('SELECT * FROM telegram_contacts WHERE user_id = ?')
   const linked = db.prepare('SELECT user_id, chat_id, username FROM telegram_contacts WHERE username = ? AND reachable = 1')
+  const organizers = db.prepare('SELECT user_id, chat_id, username FROM telegram_contacts WHERE organizer_until > ? AND reachable = 1')
   const releaseUsername = db.prepare('UPDATE telegram_contacts SET username = NULL WHERE username = ? AND user_id != ?')
   const clearUsername = db.prepare('UPDATE telegram_contacts SET username = NULL WHERE user_id = ? AND chat_id = ? AND username = ?')
   const saveContact = db.prepare(`
@@ -99,8 +104,8 @@ export function createTelegram({
   const readDraft = db.prepare('SELECT * FROM telegram_drafts WHERE user_id = ? AND nonce = ? AND expires > ?')
   const removeDraft = db.prepare('DELETE FROM telegram_drafts WHERE user_id = ?')
   const queue = db.prepare(`
-    INSERT INTO telegram_outbox (user_id, chat_id, event_id, username, text, buttons, created, ready)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO telegram_outbox (user_id, chat_id, event_id, username, text, buttons, created, ready, audience)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   const nextMessage = db.prepare('SELECT * FROM telegram_outbox WHERE ready <= ? ORDER BY ready, id LIMIT 1')
   const dropMessage = db.prepare('DELETE FROM telegram_outbox WHERE id = ?')
@@ -142,10 +147,10 @@ export function createTelegram({
     return [[{ text: 'Открыть план', url: eventUrl(event, true) }, { text: 'Открыть мероприятие', url: eventUrl(event) }]]
   }
 
-  function push(recipient, text, buttons, event = null) {
+  function push(recipient, text, buttons, event = null, audience = 'participants') {
     const now = Date.now()
     queue.run(recipient.user_id, recipient.chat_id, event?.id ?? null, event ? recipient.username : null,
-      text, buttons ? JSON.stringify(buttons) : null, now, now)
+      text, buttons ? JSON.stringify(buttons) : null, now, now, audience)
   }
 
   function recipientsFor(event) {
@@ -275,6 +280,14 @@ export function createTelegram({
     }
     if (command && user.prompt_until) savePrompt.run(0, user.user_id)
     const action = command?.[1].toLowerCase()
+    const browserCode = action === 'start' ? command[2]?.match(/^login_([A-Za-z0-9_-]{32})$/)?.[1] : null
+    if (browserCode) {
+      if (!user.username) push(user, 'Укажите имя пользователя в Telegram и повторите вход с сайта.')
+      else if (confirmBrowser(browserCode, { userId: user.user_id, username: user.username })) {
+        push(user, 'Вход подтверждён. Вернитесь на страницу «Регламента» в браузере.')
+      } else push(user, 'Ссылка устарела. Начните вход заново на сайте.')
+      return false
+    }
     if (action === 'admin') {
       savePrompt.run(Date.now() + draftLifetime, user.user_id)
       push(user, 'Введите пароль кабинета. Бот постарается удалить сообщение с паролем после проверки.')
@@ -379,7 +392,7 @@ export function createTelegram({
         continue
       }
       try {
-        if (job.event_id) {
+        if (job.event_id && job.audience !== 'organizers') {
           const chat = await call('getChat', { chat_id: job.chat_id })
           if (signal.aborted) return
           if (chat?.type !== 'private' || String(chat.id) !== job.chat_id || telegramUsername(chat.username) !== job.username) {
@@ -417,9 +430,10 @@ export function createTelegram({
     const user = contact.get(job.user_id)
     if (!user?.reachable || user.chat_id !== job.chat_id) return false
     if (!job.event_id) return true
+    if (job.audience === 'organizers') return user.organizer_until > Date.now() && Boolean(safeGetEvent(job.event_id))
     if (user.username !== job.username) return false
     const event = safeGetEvent(job.event_id)
-    return Boolean(event && taskRecipients(event).has(job.username))
+    return Boolean(event && (job.audience === 'workflow' ? hasEventAccess(event, job.username, false) : taskRecipients(event).has(job.username)))
   }
 
   return {
@@ -439,9 +453,30 @@ export function createTelegram({
       const botUrl = username ? `https://t.me/${username}?start=event_${eventKey(event.id)}` : null
       return { botUrl, recipients, connected: contacts.length }
     },
+    loginUrl(code) {
+      return username ? `https://t.me/${username}?start=login_${code}` : null
+    },
+    currentActor(actor) {
+      const user = contact.get(actor.userId)
+      return user?.username === actor.username ? actor : null
+    },
     announce,
     notifyPlan(event) {
       transaction(() => broadcast(event, `План изменился · ${event.title}\nАктуальное расписание — по кнопке ниже.`))
+    },
+    notifyWorkflow(event, { text, handles = [], coordinators = false }) {
+      transaction(() => {
+        const sent = new Set()
+        for (const handle of handles) {
+          const recipient = linked.get(handle)
+          if (!recipient || sent.has(recipient.user_id)) continue
+          sent.add(recipient.user_id)
+          push(recipient, `${event.title}\n${text}`, eventButtons(event), event, 'workflow')
+        }
+        if (coordinators) for (const recipient of organizers.all(Date.now())) {
+          if (!sent.has(recipient.user_id)) push(recipient, `${event.title}\n${text}`, eventButtons(event), event, 'organizers')
+        }
+      })
     },
   }
 }

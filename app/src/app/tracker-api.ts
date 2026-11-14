@@ -2,6 +2,7 @@ import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Service, inject } from '@angular/core';
 import { Observable } from 'rxjs';
 import type { Catalog, Event, Status, Template } from './event.model';
+import type { WorkflowAction, WorkflowView } from './workflow.model';
 
 export interface RoleSos {
   roleId: string;
@@ -22,6 +23,7 @@ export class TrackerApi {
     id: string,
     onSos: (request: RoleSos) => void = () => {},
     onSosCancelled: (request: RoleSos) => void = () => {},
+    onWorkflow: () => void = () => {},
   ): Observable<Event> {
     return new Observable((subscriber) => {
       if (typeof EventSource === 'undefined') {
@@ -57,6 +59,7 @@ export class TrackerApi {
         });
       listenForSos('sos', onSos);
       listenForSos('sos-cancelled', onSosCancelled);
+      source.addEventListener('workflow', onWorkflow);
       return () => source.close();
     });
   }
@@ -64,6 +67,32 @@ export class TrackerApi {
   updateStatus(id: string, taskId: string, status: Status, assignee: string) {
     const path = this.eventPath(id) + '/tasks/' + encodeURIComponent(taskId) + '/status';
     return this.http.post<Event>(path, { status, assignee });
+  }
+
+  workflow(id: string) {
+    return this.http.get<WorkflowView>(this.eventPath(id) + '/workflow');
+  }
+
+  applyWorkflow(id: string, action: WorkflowAction) {
+    return this.http.post<WorkflowView>(this.eventPath(id) + '/workflow', action);
+  }
+
+  overrideTask(id: string, taskId: string, completed: boolean, comment: string) {
+    return this.http.post<Event>(
+      this.eventPath(id) + '/tasks/' + encodeURIComponent(taskId) + '/status',
+      {
+        status: completed ? 'done' : 'todo',
+        comment,
+      },
+    );
+  }
+
+  startTelegramLogin() {
+    return this.http.post<{ url: string | null }>('/api/telegram/login', {});
+  }
+
+  endTelegramLogin() {
+    return this.http.delete('/api/telegram/login');
   }
 
   requestSos(id: string, roleId: string, assignee: string) {

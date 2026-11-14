@@ -1,0 +1,324 @@
+@if (view().enabled && point(); as current) {
+  <section class="point-workflow" aria-label="Управление постом">
+    <div class="point-overview">
+      <strong>Состояние поста</strong>
+      <span class="point-state" [attr.data-state]="current.status">{{
+        stateLabels[current.status]
+      }}</span>
+      @if (actor(); as title) {
+        <span class="point-actor">{{ title }}</span>
+      }
+    </div>
+
+    @if (proposal(); as offer) {
+      <section class="point-group">
+        <h3>Вам предложили стать старшим поста</h3>
+        <div class="point-actions">
+          <button
+            class="button primary"
+            type="button"
+            [disabled]="busy()"
+            (click)="
+              action.emit({ action: 'accept-senior', roleId: current.roleId, proposalId: offer.id })
+            "
+          >
+            Принять назначение
+          </button>
+          <button
+            class="button"
+            type="button"
+            [disabled]="busy()"
+            (click)="
+              action.emit({
+                action: 'decline-senior',
+                roleId: current.roleId,
+                proposalId: offer.id,
+              })
+            "
+          >
+            Отклонить
+          </button>
+        </div>
+      </section>
+    }
+
+    @if (!current.canManage && current.member && current.senior; as senior) {
+      <div class="point-actions">
+        <span class="point-contact">Старший поста {{ senior }}</span>
+        <a
+          class="button"
+          [href]="'https://t.me/' + senior.slice(1)"
+          target="_blank"
+          rel="noopener noreferrer"
+          >Задать вопрос старшему</a
+        >
+      </div>
+    } @else if (!current.canManage && current.member) {
+      <p class="point-contact">Старший поста ещё не назначен.</p>
+    }
+
+    @if (current.canManage) {
+      @if (options().length) {
+        <form class="point-form" (submit)="$event.preventDefault(); changeState(current)">
+          <label class="field">
+            <span>Изменить состояние</span>
+            <select
+              [value]="nextState()"
+              (change)="nextState.set(next.value)"
+              [disabled]="busy()"
+              #next
+            >
+              <option value="">Выберите состояние</option>
+              @for (status of options(); track status) {
+                <option [value]="status">{{ stateLabels[status] }}</option>
+              }
+            </select>
+          </label>
+          @if (nextState() === 'paused') {
+            <label class="field">
+              <span>Причина паузы</span>
+              <input
+                maxlength="2000"
+                [value]="reason()"
+                (input)="reason.set(pauseReason.value)"
+                [disabled]="busy()"
+                #pauseReason
+                required
+              />
+            </label>
+          }
+          <button
+            class="button"
+            type="submit"
+            [disabled]="busy() || !nextState() || (nextState() === 'paused' && !reason().trim())"
+          >
+            Обновить состояние
+          </button>
+        </form>
+      }
+
+      @if (commands().length) {
+        <section class="point-group">
+          <h3>Команды координатора</h3>
+          <ul class="point-list">
+            @for (command of commands(); track command.id) {
+              <li class="point-message">
+                <div class="point-message-title">
+                  <strong>{{ commandLabels[command.type] }}</strong>
+                  <span>{{ targetLabels[command.target.status] }}</span>
+                </div>
+                @if (command.message) {
+                  <p class="point-body">{{ command.message }}</p>
+                }
+                @if (current.isSenior && command.target.status === 'pending') {
+                  <div class="point-actions">
+                    <button
+                      class="button"
+                      type="button"
+                      [disabled]="busy()"
+                      (click)="
+                        action.emit({
+                          action: 'ack-command',
+                          commandId: command.id,
+                          roleId: current.roleId,
+                        })
+                      "
+                    >
+                      Подтвердить получение
+                    </button>
+                  </div>
+                } @else if (
+                  current.isSenior &&
+                  command.target.status === 'acknowledged' &&
+                  canExecute(current, command)
+                ) {
+                  <div class="point-actions">
+                    <button
+                      class="button primary"
+                      type="button"
+                      [disabled]="busy()"
+                      (click)="
+                        action.emit({
+                          action: 'execute-command',
+                          commandId: command.id,
+                          roleId: current.roleId,
+                        })
+                      "
+                    >
+                      Отметить исполнение
+                    </button>
+                  </div>
+                }
+              </li>
+            }
+          </ul>
+        </section>
+      }
+
+      @if (current.isSenior) {
+        <section class="point-group">
+          <h3>Связь с координатором</h3>
+          <div class="point-actions">
+            @if (activeSos(); as sent) {
+              <button
+                class="button point-sos"
+                type="button"
+                [disabled]="busy()"
+                (click)="action.emit({ action: 'cancel-request', id: sent.id })"
+              >
+                Отменить SOS
+              </button>
+              <span class="point-contact" role="status">SOS отправлен</span>
+            } @else {
+              <button
+                class="button point-sos"
+                type="button"
+                [disabled]="busy()"
+                aria-label="SOS: запросить помощь"
+                (click)="createRequest('sos')"
+              >
+                SOS
+              </button>
+            }
+          </div>
+          <details class="point-compose">
+            <summary>Вопрос или отчёт координатору</summary>
+            <form
+              class="point-form"
+              (submit)="$event.preventDefault(); createRequest(requestType())"
+            >
+              <label class="field">
+                <span>Тип обращения</span>
+                <select
+                  [value]="requestType()"
+                  (change)="requestType.set(requestKind.value === 'report' ? 'report' : 'question')"
+                  [disabled]="busy()"
+                  #requestKind
+                >
+                  <option value="question">Вопрос</option>
+                  <option value="report">Отчёт</option>
+                </select>
+              </label>
+              <label class="field full">
+                <span>Сообщение координатору</span>
+                <textarea
+                  rows="2"
+                  maxlength="2000"
+                  [value]="requestText()"
+                  (input)="requestText.set(message.value)"
+                  [disabled]="busy()"
+                  #message
+                  required
+                ></textarea>
+              </label>
+              <button class="button" type="submit" [disabled]="busy() || !requestText().trim()">
+                Отправить
+              </button>
+            </form>
+          </details>
+        </section>
+      }
+
+      @if (requests().length) {
+        <section class="point-group">
+          <h3>Обращения поста</h3>
+          <ul class="point-list">
+            @for (request of requests(); track request.id) {
+              <li>
+                <details class="point-message" [open]="requestOpen(request)">
+                  <summary class="point-message-title">
+                    <strong>{{ requestTypes[request.type] }}</strong>
+                    <span>{{ requestStatuses[request.status] }} · {{ request.author }}</span>
+                  </summary>
+                  <div class="point-group point-thread">
+                    @if (request.messages.length) {
+                      <ul class="point-list point-thread-messages">
+                        @for (message of request.messages; track message.id) {
+                          <li>
+                            <span class="point-contact">{{ message.author }}</span>
+                            <p class="point-body">{{ message.text }}</p>
+                          </li>
+                        }
+                      </ul>
+                    }
+                    @if (requestOpen(request)) {
+                      <div class="point-actions">
+                        @if (
+                          view().actor?.isAdmin &&
+                          ((request.type === 'sos' && request.status === 'new') ||
+                            (request.type === 'question' && request.status === 'waiting'))
+                        ) {
+                          <button
+                            class="button"
+                            type="button"
+                            [disabled]="busy()"
+                            (click)="action.emit({ action: 'accept-request', id: request.id })"
+                          >
+                            Взять в работу
+                          </button>
+                        }
+                        @if (request.type === 'sos') {
+                          @if (view().actor?.isAdmin && request.status === 'in_progress') {
+                            <button
+                              class="button"
+                              type="button"
+                              [disabled]="busy()"
+                              (click)="action.emit({ action: 'resolve-request', id: request.id })"
+                            >
+                              Помощь оказана
+                            </button>
+                          }
+                        } @else if (request.type === 'question') {
+                          <button
+                            class="button"
+                            type="button"
+                            [disabled]="busy()"
+                            (click)="action.emit({ action: 'close-request', id: request.id })"
+                          >
+                            Закрыть вопрос
+                          </button>
+                        } @else if (view().actor?.isAdmin && request.status === 'new') {
+                          <button
+                            class="button"
+                            type="button"
+                            [disabled]="busy()"
+                            (click)="action.emit({ action: 'view-request', id: request.id })"
+                          >
+                            Отметить просмотренным
+                          </button>
+                        }
+                      </div>
+                      <form
+                        class="point-form"
+                        (submit)="$event.preventDefault(); sendReply(request)"
+                      >
+                        <label class="field">
+                          <span>Ответ в обращении</span>
+                          <input
+                            maxlength="2000"
+                            [value]="replyText(request.id)"
+                            (input)="reply.set({ id: request.id, text: answer.value })"
+                            [disabled]="busy()"
+                            #answer
+                            required
+                          />
+                        </label>
+                        <button
+                          class="button"
+                          type="submit"
+                          [disabled]="busy() || !replyText(request.id).trim()"
+                        >
+                          Отправить ответ
+                        </button>
+                      </form>
+                    }
+                  </div>
+                </details>
+              </li>
+            }
+          </ul>
+        </section>
+      }
+    }
+  </section>
+}

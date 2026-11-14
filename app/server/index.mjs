@@ -6,12 +6,15 @@ import { extname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { createTelegram } from './telegram.mjs'
+import { createTelegramLink } from './telegram-link.mjs'
+import { createWorkflow, initialWorkflow, WorkflowError } from './workflow.mjs'
 
 const statuses = new Set(['todo', 'doing', 'blocked', 'done'])
 const idPattern = /^[A-Za-z0-9_-]{1,80}$/
 const timePattern = /^(?:[01]\d|2[0-3]):[0-5]\d$/
 const tokenPattern = /^[A-Za-z0-9_-]{43}$/
 const cookieName = 'regatta_session'
+const telegramCookie = 'regatta_telegram'
 const sessionDuration = 12 * 60 * 60 * 1000
 const loginWindow = 15 * 60 * 1000
 const sosDurationMs = 5 * 60_000
@@ -385,7 +388,7 @@ function openStore(dataDir, demo) {
       const event = prepareImport(body)
       return transaction(() => insertEvent(event))
     },
-    updateEvent: (id, body) => transaction(() => {
+    updateEvent: (id, body, { enableWorkflow = false } = {}) => transaction(() => {
       const existing = getStoredEvent(id)
       if (body.id !== id) invalid('Идентификатор мероприятия не совпадает.')
       if (body.revision !== existing.revision) {
@@ -394,6 +397,9 @@ function openStore(dataDir, demo) {
       const event = normalizeEvent(body, id, existing.revision + 1)
       db.prepare('UPDATE events SET data = ? WHERE id = ?').run(JSON.stringify(event), id)
       synchronizeInvitations(event)
+      if (enableWorkflow) {
+        db.prepare('INSERT OR IGNORE INTO event_workflow VALUES (?, ?)').run(id, JSON.stringify(initialWorkflow(id)))
+      }
       return getEvent(id)
     }),
     createTemplate: ({ eventId, title }) => transaction(() => {
@@ -482,8 +488,8 @@ function requestToken(request) {
   return authorization.match(/^Bearer (\S+)$/i)?.[1] ?? ''
 }
 
-function requestCookie(request) {
-  return request.headers.cookie?.match(new RegExp(`(?:^|;\\s*)${cookieName}=([^;]*)`))?.[1]
+function requestCookie(request, name = cookieName) {
+  return request.headers.cookie?.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`))?.[1]
 }
 
 async function staticFile(response, method, path, directory) {
@@ -524,10 +530,14 @@ export function createTrackerServer({
   const directory = resolve(staticDir)
   const passwordHash = digest(password)
   const verifyAdminPassword = (value) => typeof value === 'string' && timingSafeEqual(passwordHash, digest(value))
+  let telegramLink
   const telegram = telegramToken ? telegramFactory({
     token: telegramToken, dataDir: resolve(dataDir), publicOrigin, verifyAdminPassword,
     listEvents: () => store.catalog().events, getEvent: store.getEvent,
+    confirmBrowser: (code, actor) => telegramLink.confirm(code, actor),
   }) : null
+  telegramLink = createTelegramLink(telegram)
+  const workflow = createWorkflow({ database: join(resolve(dataDir), 'regatta.sqlite'), getEvent: store.getEvent })
   const sessions = new Map()
   const loginAttempts = new Map()
   const eventStreams = new Map()
@@ -539,7 +549,23 @@ export function createTrackerServer({
     else response.write(data)
   }
 
-  function streamEvent(id, cookie, response) {
+  function workflowActor(browser, isAdmin) {
+    const linked = telegramLink.actor(browser)
+    const actor = linked && telegram?.currentActor?.(linked)
+    return actor || isAdmin ? { ...actor, isAdmin } : null
+  }
+
+  function eventFor(event, actor) {
+    if (!workflow.enabled(event.id)) return event
+    const safe = { ...event, managedWorkflow: true }
+    if (actor?.isAdmin || (actor && (workflow.view(event.id, actor).points.length || event.tasks.some((task) => task.assignees.includes(actor.username))))) return safe
+    const anonymous = (item) => ({ ...item, assignee: '', assignees: [] })
+    return { ...safe, info: [], description: '', tasks: event.tasks.map(anonymous), roles: event.roles.map((role) => ({
+      ...anonymous(role), tasks: role.tasks.map(anonymous),
+    })) }
+  }
+
+  function streamEvent(id, cookie, browser, response) {
     const event = store.getEvent(id)
     if (eventStreams.size >= maxEventStreams) {
       throw new RequestError(503, 'Слишком много подключений. Обновления продолжат загружаться автоматически.')
@@ -549,9 +575,9 @@ export function createTrackerServer({
       'Cache-Control': 'no-cache, no-transform',
       'X-Accel-Buffering': 'no',
     })
-    eventStreams.set(response, { id, cookie })
+    eventStreams.set(response, { id, cookie, browser })
     response.once('close', () => eventStreams.delete(response))
-    writeStream(response, `retry: 3000\ndata: ${JSON.stringify(event)}\n\n`)
+    writeStream(response, `retry: 3000\ndata: ${JSON.stringify(eventFor(event, workflowActor(browser, authenticated(cookie))))}\n\n`)
     if (authenticated(cookie)) {
       for (const { eventId, alert, cancelled } of roleSosRequests.values()) {
         if (eventId === id && alert.expiresAt > Date.now()) {
@@ -563,8 +589,13 @@ export function createTrackerServer({
 
   function broadcast(eventId, data, name) {
     let frame
-    for (const [stream, { id, cookie }] of eventStreams) {
-      if (id !== eventId || (name && !authenticated(cookie))) continue
+    const scoped = !name && workflow.enabled(eventId)
+    for (const [stream, { id, cookie, browser }] of eventStreams) {
+      if (id !== eventId || (name && name !== 'workflow' && !authenticated(cookie))) continue
+      if (scoped) {
+        writeStream(stream, `data: ${JSON.stringify(eventFor(data, workflowActor(browser, authenticated(cookie))))}\n\n`)
+        continue
+      }
       frame ??= `${name ? `event: ${name}\n` : ''}data: ${JSON.stringify(data)}\n\n`
       writeStream(stream, frame)
     }
@@ -576,6 +607,7 @@ export function createTrackerServer({
   }
 
   async function handleRoleSos(eventId, roleId, request, response) {
+    if (workflow.enabled(eventId)) throw new RequestError(409, 'SOS доступен старшему в карточке рабочей точки.')
     const assignee = person(request.method === 'GET'
       ? new URL(request.url, 'http://localhost').searchParams.get('assignee') ?? ''
       : (await readBody(request)).assignee ?? '')
@@ -610,6 +642,28 @@ export function createTrackerServer({
     return writeJson(response, 200, { sent: true, expiresAt: alert.expiresAt })
   }
 
+  function notifyWorkflow(event, body, view) {
+    if (!telegram?.notifyWorkflow) return
+    const point = view.points.find((entry) => entry.roleId === body.roleId)
+    let notification
+    if (body.action === 'propose-senior' && point?.proposal) {
+      notification = { text: `Предложение стать старшим точки «${point.title}». Подтвердите в Регламенте.`, handles: [point.proposal.username] }
+    } else if (body.action === 'create-command') {
+      const targets = view.points.filter((entry) => body.roleIds.includes(entry.roleId))
+      const handles = targets.map((entry) => entry.senior).filter(Boolean)
+      notification = { text: 'Координатор отправил команду вашему посту. Откройте Регламент.', handles }
+    } else if (body.action === 'create-request' && point) {
+      const heading = { sos: 'Нужна помощь', question: 'Новый вопрос', report: 'Новый отчёт' }[body.type]
+      notification = { text: `${heading} от точки «${point.title}». Откройте рабочий режим.`, coordinators: true }
+    }
+    if (!notification) return
+    try {
+      telegram.notifyWorkflow(event, notification)
+    } catch {
+      console.error('Не удалось поставить в очередь уведомление рабочего режима.')
+    }
+  }
+
   const heartbeat = setInterval(() => {
     for (const stream of eventStreams.keys()) writeStream(stream, ': heartbeat\n\n')
     const now = Date.now()
@@ -622,6 +676,13 @@ export function createTrackerServer({
   function setSession(response, token, age) {
     response.setHeader('Set-Cookie', [
       `${cookieName}=${token}`, 'Path=/', `Max-Age=${age}`, 'HttpOnly', 'SameSite=Strict',
+      ...(secureCookie ? ['Secure'] : []),
+    ].join('; '))
+  }
+
+  function setTelegramSession(response, browser, age) {
+    response.setHeader('Set-Cookie', [
+      `${telegramCookie}=${browser}`, 'Path=/', `Max-Age=${age}`, 'HttpOnly', 'SameSite=Lax',
       ...(secureCookie ? ['Secure'] : []),
     ].join('; '))
   }
@@ -681,6 +742,8 @@ export function createTrackerServer({
     }
     const cookie = requestCookie(request)
     const isAdmin = authenticated(cookie)
+    const browser = requestCookie(request, telegramCookie)
+    const actor = workflowActor(browser, isAdmin)
     const token = requestToken(request)
     if (path === '/api/health' && method === 'GET') return writeJson(response, 200, { ok: true })
     if (path === '/api/admin/session' && method === 'GET') return writeJson(response, 200, { authenticated: isAdmin })
@@ -690,9 +753,23 @@ export function createTrackerServer({
       setSession(response, '', 0)
       return writeJson(response, 200, { authenticated: false })
     }
+    if (path === '/api/telegram/login' && method === 'POST') {
+      const started = telegramLink.start(browser)
+      if (!started) throw new RequestError(503, 'Вход через Telegram пока недоступен.')
+      setTelegramSession(response, started.browser, 12 * 60 * 60)
+      return writeJson(response, 200, { url: started.url })
+    }
+    if (path === '/api/telegram/login' && method === 'DELETE') {
+      telegramLink.logout(browser)
+      setTelegramSession(response, '', 0)
+      return writeJson(response, 200, { ok: true })
+    }
     if (path.startsWith('/api/admin/')) {
       if (!isAdmin) throw new RequestError(401, 'Войдите в кабинет организатора.')
-      if (path === '/api/admin/catalog' && method === 'GET') return writeJson(response, 200, store.catalog())
+      if (path === '/api/admin/catalog' && method === 'GET') {
+        const catalog = store.catalog()
+        return writeJson(response, 200, { ...catalog, events: catalog.events.map((event) => eventFor(event, actor)) })
+      }
       if (path === '/api/admin/events' && method === 'POST') {
         return writeJson(response, 201, store.createEvent(await readBody(request)))
       }
@@ -721,16 +798,28 @@ export function createTrackerServer({
         }
         if (!action && method === 'PUT') {
           const body = await readBody(request)
-          const previous = telegram ? store.getEvent(id) : null
-          const event = store.updateEvent(id, body)
-          if (previous && planChanged(previous, event)) {
+          const enableWorkflow = body.enableWorkflow === true
+          const managed = workflow.enabled(id)
+          const previous = telegram || managed ? store.getEvent(id) : null
+          if (managed) {
+            const statuses = new Map([...previous.tasks, ...previous.roles.flatMap((role) => role.tasks)]
+              .map((task) => [task.id, task.status]))
+            for (const task of [...(Array.isArray(body.tasks) ? body.tasks : []), ...(Array.isArray(body.roles) ? body.roles.flatMap((role) => Array.isArray(role?.tasks) ? role.tasks : []) : [])]) {
+              if (task && typeof task === 'object') task.status = statuses.get(task.id) ?? 'todo'
+            }
+          }
+          const event = store.updateEvent(id, body, { enableWorkflow })
+          if (telegram && previous && !(enableWorkflow && !managed) && planChanged(previous, event)) {
             try {
               telegram.notifyPlan(event)
             } catch {
               console.error('Не удалось поставить в очередь уведомление об изменении плана.')
             }
           }
-          return publishEvent(response, event)
+          writeJson(response, 200, eventFor(event, actor))
+          broadcast(event.id, event)
+          if (enableWorkflow) broadcast(event.id, {}, 'workflow')
+          return
         }
       }
     }
@@ -738,12 +827,22 @@ export function createTrackerServer({
     if (roleSos && ['GET', 'POST', 'DELETE'].includes(method)) {
       return handleRoleSos(identifier(roleSos[1]), identifier(roleSos[2]), request, response)
     }
-    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|telegram|tasks\/([^/]+)\/status))?$/)
+    const publicEvent = path.match(/^\/api\/events\/([^/]+)(?:\/(access|cover|stream|telegram|workflow|tasks\/([^/]+)\/status))?$/)
     if (publicEvent) {
       const [, rawEventId, action, taskId] = publicEvent
       const eventId = identifier(rawEventId)
-      if (!action && method === 'GET') return writeJson(response, 200, store.getEvent(eventId))
-      if (action === 'stream' && method === 'GET') return streamEvent(eventId, cookie, response)
+      if (!action && method === 'GET') return writeJson(response, 200, eventFor(store.getEvent(eventId), actor))
+      if (action === 'stream' && method === 'GET') return streamEvent(eventId, cookie, browser, response)
+      if (action === 'workflow' && method === 'GET') return writeJson(response, 200, workflow.view(eventId, actor))
+      if (action === 'workflow' && method === 'POST') {
+        const body = await readBody(request)
+        const before = workflow.view(eventId, actor)
+        const view = workflow.apply(eventId, actor, body)
+        if (view.audit[0]?.id !== before.audit[0]?.id) notifyWorkflow(store.getEvent(eventId), body, view)
+        if (body.action === 'enable') broadcast(eventId, store.getEvent(eventId))
+        broadcast(eventId, {}, 'workflow')
+        return writeJson(response, 200, view)
+      }
       if (action === 'telegram' && method === 'GET') {
         const event = store.getEvent(eventId)
         return writeJson(response, 200, { botUrl: telegram?.info(event).botUrl ?? null })
@@ -754,13 +853,27 @@ export function createTrackerServer({
         return response.end(bytes)
       }
       if (action === 'access' && method === 'GET') {
+        if (workflow.enabled(eventId)) throw new RequestError(401, 'Войдите через Telegram.')
         const assignee = store.assigneeForToken(eventId, token)
         if (!assignee) throw new RequestError(401, 'Личная ссылка недействительна.')
         return writeJson(response, 200, { assignee })
       }
       if (taskId && method === 'POST') {
         const body = await readBody(request)
-        const updated = store.updateTask(eventId, identifier(taskId), status(body.status), {
+        const id = identifier(taskId)
+        const next = status(body.status)
+        if (workflow.enabled(eventId)) {
+          workflow.authorizeTask(eventId, id, actor, body)
+          const previous = store.getEvent(eventId)
+          const updated = store.updateTask(eventId, id, next, { isAdmin: true })
+          if (updated.revision !== previous.revision) {
+            workflow.recordTask(eventId, id, actor, body)
+            broadcast(eventId, {}, 'workflow')
+          }
+          writeJson(response, 200, eventFor(updated, actor))
+          return broadcast(eventId, updated)
+        }
+        const updated = store.updateTask(eventId, id, next, {
           isAdmin, token, assignee: body.assignee,
         })
         return publishEvent(response, updated)
@@ -773,6 +886,7 @@ export function createTrackerServer({
     handle(request, response).catch((error) => {
       if (response.headersSent) return response.destroy()
       if (error instanceof RequestError) return writeJson(response, error.status, { error: error.message })
+      if (error instanceof WorkflowError) return writeJson(response, error.status, { error: error.message, code: error.code })
       console.error(error)
       return writeJson(response, 500, { error: 'Не удалось выполнить запрос. Попробуйте ещё раз.' })
     })
@@ -783,6 +897,7 @@ export function createTrackerServer({
     for (const stream of eventStreams.keys()) stream.destroy()
     eventStreams.clear()
     telegram?.close()
+    workflow.close()
     store.close()
   })
   return server

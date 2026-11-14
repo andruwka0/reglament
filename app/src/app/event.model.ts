@@ -53,6 +53,7 @@ export interface Event {
   tasks: Task[];
   revision: number;
   coverVersion?: string;
+  managedWorkflow?: boolean;
 }
 
 export interface Template {

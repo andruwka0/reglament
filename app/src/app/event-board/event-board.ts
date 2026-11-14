@@ -1,4 +1,4 @@
-import { NgTemplateOutlet } from '@angular/common';
+import { DatePipe, NgTemplateOutlet } from '@angular/common';
 import {
   Component,
   DestroyRef,
@@ -20,10 +20,12 @@ import {
   distinctUntilChanged,
   exhaustMap,
   from,
+  firstValueFrom,
   interval,
   map,
   merge,
   mergeMap,
+  Subject,
   startWith,
   switchMap,
   tap,
@@ -35,6 +37,8 @@ import { OrganizerSession } from '../organizer-session';
 import { TrackerApi, errorMessage, type RoleSos } from '../tracker-api';
 import { buildLivePlan, groupPlanTasks, type LiveState } from './live-plan';
 import { assignedPeople, buildPosts, COMMON_POST_ID, taskAssignedTo } from './post-view';
+import { PointWorkflow } from './point-workflow';
+import type { WorkflowAction, WorkflowView } from '../workflow.model';
 
 type BoardPage = 'tasks' | 'plan' | 'team' | 'important';
 type BoardAlert = { key: string; kind: 'sos' | 'complete'; role: string; detail: string };
@@ -56,7 +60,7 @@ const dateFormat = new Intl.DateTimeFormat('ru-RU', {
 
 @Component({
   selector: 'app-event-board',
-  imports: [NgTemplateOutlet],
+  imports: [DatePipe, NgTemplateOutlet, PointWorkflow],
   templateUrl: './event-board.html',
   host: {
     '(window:resize)': 'updateViewport()',
@@ -94,6 +98,18 @@ export class EventBoard {
 
   protected readonly event = signal<Event | null>(null);
   protected readonly botUrl = signal<string | null>(null);
+  protected readonly workflow = signal<WorkflowView | null>(null);
+  protected readonly managedWorkflow = computed(
+    () => !!(this.event()?.managedWorkflow || this.workflow()?.enabled),
+  );
+  protected readonly actualStages = computed(
+    () => new Map(this.workflow()?.stages.map((stage) => [stage.stageId, stage])),
+  );
+  protected readonly workflowBusy = signal(false);
+  protected readonly workflowError = signal('');
+  protected readonly lastAppliedAction = signal<WorkflowAction | null>(null);
+  protected readonly telegramLoginUrl = signal<string | null>(null);
+  private readonly workflowRefresh = new Subject<void>();
   private readonly eventId = computed(() => this.event()?.id);
   protected readonly coverUrl = computed(() => {
     const event = this.event();
@@ -107,7 +123,20 @@ export class EventBoard {
   protected readonly pending = signal(new Map<string, symbol>());
   protected readonly posts = computed(() => {
     const event = this.event();
-    return event ? buildPosts(event, this.personFilter()) : [];
+    if (!event) return [];
+    const workflow = this.workflow();
+    if (
+      !workflow?.enabled ||
+      !this.personFilter() ||
+      this.personFilter() !== workflow.actor?.username
+    ) {
+      return buildPosts(event, this.personFilter());
+    }
+    const ownRoles = new Set(workflow.points.map((point) => point.roleId));
+    const assignedCommon = buildPosts(event, this.personFilter()).filter(
+      (post) => post.id === COMMON_POST_ID,
+    );
+    return [...buildPosts(event, '').filter((post) => ownRoles.has(post.id)), ...assignedCommon];
   });
   protected readonly activePost = computed(
     () => this.posts().find((post) => post.id === this.selectedPostId()) ?? this.posts()[0],
@@ -160,6 +189,16 @@ export class EventBoard {
     const person = this.personFilter();
     const groups = this.taskGroups();
     if (!person) return groups;
+    const workflow = this.workflow();
+    if (workflow?.enabled && person === workflow.actor?.username) {
+      const roles = new Set(workflow.points.map((point) => point.roleId));
+      return groups.flatMap((role) => {
+        if (roles.has(role.id)) return [role];
+        if (role.id !== COMMON_POST_ID) return [];
+        const tasks = role.tasks.filter((task) => taskAssignedTo(task, [], person));
+        return tasks.length ? [{ ...role, tasks }] : [];
+      });
+    }
     return groups
       .map((role) => {
         const inherited = this.people(role);
@@ -169,6 +208,17 @@ export class EventBoard {
       .filter((role) => role.tasks.length > 0 || this.ownRoleIds().has(role.id));
   });
   protected readonly editableTaskIds = computed(() => {
+    const workflow = this.workflow();
+    if (this.managedWorkflow()) {
+      const roles = new Set(
+        workflow?.points.filter((point) => point.isSenior).map((point) => point.roleId),
+      );
+      return new Set(
+        this.taskGroups()
+          .filter((role) => roles.has(role.id))
+          .flatMap((role) => role.tasks.map((task) => task.id)),
+      );
+    }
     if (!this.personFilter()) return new Set<string>();
     return new Set(this.personGroups().flatMap((group) => group.tasks.map((task) => task.id)));
   });
@@ -183,7 +233,22 @@ export class EventBoard {
   });
   protected readonly livePlan = computed(() => {
     const event = this.event();
-    return event ? buildLivePlan(event, new Date(this.now() * 60_000)) : null;
+    if (!event) return null;
+    const plan = buildLivePlan(event, new Date(this.now() * 60_000));
+    if (!this.managedWorkflow()) return plan;
+    const actual = this.actualStages();
+    return {
+      ...plan,
+      schedule: plan.schedule.map((item) => ({
+        ...item,
+        state:
+          actual.get(item.id)?.status === 'finished'
+            ? ('past' as const)
+            : actual.get(item.id)?.status === 'started'
+              ? ('current' as const)
+              : ('upcoming' as const),
+      })),
+    };
   });
   protected readonly planTasks = computed(() => {
     const plan = this.livePlan();
@@ -215,7 +280,8 @@ export class EventBoard {
       const id = this.eventId();
       const assignee = this.personFilter();
       const roles = this.ownRoleIds();
-      if (id && assignee) untracked(() => this.loadSosStates(id, assignee, roles));
+      if (id && assignee && !this.managedWorkflow())
+        untracked(() => this.loadSosStates(id, assignee, roles));
     });
     const authentication = toObservable(computed(() => this.organizerSession.authenticated()));
     interval(1000)
@@ -239,6 +305,10 @@ export class EventBoard {
             this.route.snapshot.queryParamMap.get('view') === 'plan' ? 'plan' : 'tasks',
           );
           this.botUrl.set(null);
+          this.workflow.set(null);
+          this.workflowError.set('');
+          this.workflowBusy.set(false);
+          this.lastAppliedAction.set(null);
           this.resetTaskFilters();
         }),
         switchMap((id) =>
@@ -260,6 +330,7 @@ export class EventBoard {
                   id,
                   (request) => this.showSos(request),
                   (request) => this.removeSos(request),
+                  () => this.workflowRefresh.next(),
                 ),
               ),
             ),
@@ -282,6 +353,88 @@ export class EventBoard {
         takeUntilDestroyed(this.destroyRef),
       )
       .subscribe(({ botUrl }) => this.botUrl.set(botUrl));
+
+    toObservable(this.eventId)
+      .pipe(
+        switchMap((id) =>
+          id
+            ? merge(this.workflowRefresh, interval(5000)).pipe(
+                startWith(0),
+                switchMap(() => this.api.workflow(id).pipe(catchError(() => EMPTY))),
+              )
+            : EMPTY,
+        ),
+        takeUntilDestroyed(this.destroyRef),
+      )
+      .subscribe((view) => {
+        const previous = this.workflow();
+        this.workflow.set(view);
+        if (view.actor?.isAdmin) this.notifyWorkflowSos(previous, view);
+        if (view.actor?.username && view.actor.username !== previous?.actor?.username) {
+          this.telegramLoginUrl.set(null);
+          if (view.enabled) this.choosePerson(view.actor.username);
+        }
+        if (
+          view.enabled &&
+          (!previous?.enabled ||
+            view.actor?.userId !== previous?.actor?.userId ||
+            view.actor?.isAdmin !== previous?.actor?.isAdmin)
+        ) {
+          const id = this.eventId();
+          if (id)
+            this.api
+              .event(id)
+              .pipe(
+                catchError(() => EMPTY),
+                takeUntilDestroyed(this.destroyRef),
+              )
+              .subscribe((updated) => {
+                if (this.eventId() === id && updated.revision >= (this.event()?.revision ?? 0))
+                  this.event.set(updated);
+              });
+        }
+      });
+  }
+
+  protected async startTelegramLogin() {
+    this.workflowError.set('');
+    try {
+      this.telegramLoginUrl.set((await firstValueFrom(this.api.startTelegramLogin())).url);
+    } catch (error) {
+      this.workflowError.set(errorMessage(error));
+    }
+  }
+
+  protected async endTelegramLogin() {
+    try {
+      await firstValueFrom(this.api.endTelegramLogin());
+      this.telegramLoginUrl.set(null);
+      this.choosePerson('');
+      this.workflowRefresh.next();
+    } catch (error) {
+      this.workflowError.set(errorMessage(error));
+    }
+  }
+
+  protected async applyWorkflow(action: WorkflowAction) {
+    const id = this.eventId();
+    if (!id || this.workflowBusy()) return;
+    this.workflowBusy.set(true);
+    this.workflowError.set('');
+    try {
+      const view = await firstValueFrom(this.api.applyWorkflow(id, action));
+      if (this.eventId() === id) {
+        this.workflow.set(view);
+        this.lastAppliedAction.set(action);
+      }
+    } catch (error) {
+      if (this.eventId() === id) this.workflowError.set(errorMessage(error));
+    } finally {
+      if (this.eventId() === id) {
+        this.workflowBusy.set(false);
+        this.workflowRefresh.next();
+      }
+    }
   }
 
   protected refreshClock() {
@@ -577,6 +730,37 @@ export class EventBoard {
     );
   }
 
+  private notifyWorkflowSos(previous: WorkflowView | null, view: WorkflowView) {
+    const active = new Set(
+      view.requests
+        .filter(
+          (request) =>
+            request.type === 'sos' && !['resolved', 'cancelled', 'closed'].includes(request.status),
+        )
+        .map((request) => request.id),
+    );
+    for (const request of previous?.requests ?? []) {
+      if (request.type === 'sos' && !active.has(request.id))
+        this.dismissAlert(`workflow-sos:${request.id}`);
+    }
+    const known = new Set(previous?.requests.map((request) => request.id));
+    for (const request of view.requests) {
+      const remaining = Date.parse(request.createdAt) + alertDurationMs.sos - Date.now();
+      if (!active.has(request.id) || known.has(request.id) || !(remaining > 0)) continue;
+      const point = view.points.find((entry) => entry.roleId === request.roleId);
+      if (point)
+        this.showAlert(
+          {
+            key: `workflow-sos:${request.id}`,
+            kind: 'sos',
+            role: point.title,
+            detail: request.author,
+          },
+          remaining,
+        );
+    }
+  }
+
   private removeSos(request: RoleSos): void {
     const key = 'sos:' + this.sosKey(request.roleId, request.assignee);
     this.sosAlertExpiry.delete(key);
@@ -646,7 +830,7 @@ export class EventBoard {
     this.event.set(
       current && !fromRefresh ? { ...next, coverVersion: current.coverVersion } : next,
     );
-    if (current) this.notifyCompletedRoles(current, next);
+    if (current && !this.managedWorkflow()) this.notifyCompletedRoles(current, next);
     if (!current) this.restorePerson(next);
     if (this.roleFilter() && !next.roles.some((role) => role.id === this.roleFilter())) {
       this.roleFilter.set('');

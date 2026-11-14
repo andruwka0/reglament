@@ -1,0 +1,253 @@
+@if (!view().enabled) {
+  <div class="edit-block">
+    <h3>Координация смены</h3>
+    <p class="muted">Старшие подтверждают задачи и связываются с координатором. Волонтёры видят свой план, а старшие входят через Telegram.</p>
+    <button class="button primary" type="button" [disabled]="busy()" (click)="dispatch({ action: 'enable' })">Включить координацию</button>
+  </div>
+} @else {
+  <details class="edit-block" open>
+    <summary>Обращения @if (pendingSos()) { <span class="muted">{{ pendingSos() }} SOS</span> }</summary>
+    <div class="stack">
+      @for (request of activeRequests(); track request.id) {
+        <ng-container [ngTemplateOutlet]="requestCard" [ngTemplateOutletContext]="{ $implicit: request, active: true }"></ng-container>
+      } @empty {
+        <p class="muted">Активных обращений пока нет.</p>
+      }
+      @if (previousRequests().length) {
+        <details class="edit-block card">
+          <summary>Завершённые <span class="muted">{{ previousRequests().length }}</span></summary>
+          <div class="stack">
+            @for (request of previousRequests(); track request.id) {
+              <ng-container [ngTemplateOutlet]="requestCard" [ngTemplateOutletContext]="{ $implicit: request, active: false }"></ng-container>
+            }
+          </div>
+        </details>
+      }
+    </div>
+  </details>
+
+  <details class="edit-block" open>
+    <summary>Точки и старшие</summary>
+    <div class="stack">
+      @for (point of view().points; track point.roleId) {
+        <details class="edit-block card">
+          <summary class="wrap">{{ point.title }} <span class="muted">{{ pointStatusLabels[point.status] }}</span></summary>
+          <p class="muted wrap">Старший: {{ point.senior || 'не назначен' }}</p>
+          @if (point.status === 'preparation') {
+            <div class="field">
+              <label [attr.for]="'workflow-kind-' + point.roleId">Тип точки</label>
+              <select #kind [id]="'workflow-kind-' + point.roleId" [disabled]="busy()" (change)="configurePoint(point.roleId, kind, point.kind)">
+                @for (option of pointKinds; track option) {
+                  <option [value]="option" [selected]="point.kind === option">{{ pointKindLabels[option] }}</option>
+                }
+              </select>
+            </div>
+          } @else {
+            <p class="muted">Тип точки: {{ pointKindLabels[point.kind] }}</p>
+          }
+          @if (point.proposal; as proposal) {
+            <div class="inline-actions">
+              <span class="wrap">{{ proposal.username }} · ожидает подтверждения</span>
+              <button class="button secondary" type="button" [disabled]="busy()"
+                (click)="dispatch({ action: 'revoke-proposal', roleId: point.roleId, proposalId: proposal.id })">Отозвать предложение</button>
+            </div>
+          }
+          @let candidates = seniorCandidates(point.roleId, point.senior, point.proposal?.username ?? null);
+          @if (candidates.length && !point.proposal) {
+            <div class="inline-actions pick">
+              <div class="field">
+                <label [attr.for]="'workflow-candidate-' + point.roleId">Кандидат в старшие</label>
+                <select #candidate [id]="'workflow-candidate-' + point.roleId" [disabled]="busy()" (change)="chooseSenior(point.roleId, candidate.value)">
+                  <option value="" [selected]="!candidates.includes(seniorChoices()[point.roleId])">Выберите участника</option>
+                  @for (person of candidates; track person) {
+                    <option [value]="person" [selected]="seniorChoices()[point.roleId] === person">{{ person }}</option>
+                  }
+                </select>
+              </div>
+              <button class="button secondary" type="button" [disabled]="busy() || !candidates.includes(seniorChoices()[point.roleId])"
+                (click)="proposeSenior(point.roleId, candidate.value)">Предложить роль</button>
+            </div>
+          }
+          @if (point.senior) {
+            <button class="button danger" type="button" [disabled]="busy()"
+              (click)="dispatch({ action: 'revoke-senior', roleId: point.roleId })">Снять назначение</button>
+          }
+        </details>
+      } @empty {
+        <p class="muted">Добавьте и сохраните роли мероприятия, чтобы появились точки.</p>
+      }
+    </div>
+  </details>
+
+  <details class="edit-block">
+    <summary>Команды точкам</summary>
+    <div class="stack">
+      <div class="field">
+        <label for="workflow-command">Команда</label>
+        <select #commandChoice id="workflow-command" [disabled]="busy()" (change)="chooseCommand(commandChoice.value)">
+          @for (type of commandTypes; track type) {
+            <option [value]="type" [selected]="command().type === type">{{ commandLabels[type] }}</option>
+          }
+        </select>
+      </div>
+      @if (eligibleTargets().length) {
+        <fieldset class="targets" [disabled]="busy()">
+          <legend>Получатели</legend>
+          @for (point of eligibleTargets(); track point.roleId) {
+            <label class="wrap">
+              <input type="checkbox" #target [checked]="command().targets.includes(point.roleId)"
+                (change)="toggleTarget(point.roleId, target.checked)">
+              {{ point.title }} · {{ pointStatusLabels[point.status] }}
+            </label>
+          }
+        </fieldset>
+        <label class="field">Комментарий к команде
+          <textarea #commandMessage rows="2" maxlength="2000" [disabled]="busy()" [value]="command().message"
+            (input)="editCommandMessage(commandMessage.value)"></textarea>
+        </label>
+        <div class="inline-actions">
+          <button class="button primary" type="button" [disabled]="busy() || !selectedTargets().length"
+            (click)="sendCommand()">Выдать команду</button>
+        </div>
+      } @else {
+        <p class="muted">Для этой команды пока нет подходящих точек.</p>
+      }
+      @for (command of view().commands; track command.id) {
+        <article class="edit-block card">
+          <h3>{{ commandLabels[command.type] }}</h3>
+          <p class="muted small"><time [attr.datetime]="command.createdAt">{{ command.createdAt | date:'dd.MM HH:mm':'+0300' }}</time></p>
+          @if (command.message) { <p class="wrap preserve-lines">{{ command.message }}</p> }
+          <ul class="compact">
+            @for (target of command.targets; track target.roleId) {
+              <li class="wrap">{{ pointTitle(target.roleId) }} · {{ targetLabels[target.status] }}</li>
+            }
+          </ul>
+        </article>
+      }
+    </div>
+  </details>
+
+  <details class="edit-block">
+    <summary>Фактические этапы</summary>
+    <div class="stack">
+      @for (stage of view().stages; track stage.stageId) {
+        <article class="edit-block card">
+          <h3 class="wrap">{{ stage.title }}</h3>
+          <p class="muted small">{{ stageLabels[stage.status] }}
+            @if (stage.start || stage.end) { · По плану {{ stage.start || 'до' }} @if (stage.start && stage.end) {–} {{ stage.end }} }
+          </p>
+          @if (stage.startedAt; as startedAt) {
+            <p class="small">Начался в <time [attr.datetime]="startedAt">{{ startedAt | date:'HH:mm':'+0300' }}</time></p>
+          }
+          @if (stage.finishedAt; as finishedAt) {
+            <p class="small">Завершился в <time [attr.datetime]="finishedAt">{{ finishedAt | date:'HH:mm':'+0300' }}</time></p>
+          }
+          @if (stage.status === 'planned') {
+            <button class="button secondary" type="button" [disabled]="busy()"
+              (click)="dispatch({ action: 'mark-stage', stageId: stage.stageId, status: 'started' })">Начать этап</button>
+          } @else if (stage.status === 'started') {
+            <button class="button secondary" type="button" [disabled]="busy()"
+              (click)="dispatch({ action: 'mark-stage', stageId: stage.stageId, status: 'finished' })">Завершить этап</button>
+          }
+        </article>
+      } @empty {
+        <p class="muted">Добавьте и сохраните этапы в расписании мероприятия.</p>
+      }
+    </div>
+  </details>
+
+  <details class="edit-block">
+    <summary>Исправить отметку задачи</summary>
+    <div class="stack">
+      <div class="field">
+        <label for="workflow-task">Задача</label>
+        <select #taskChoice id="workflow-task" [disabled]="busy()" (change)="overrideTaskId.set(taskChoice.value)">
+          <option value="" [selected]="!overrideTask()">Выберите задачу</option>
+          @for (role of event().roles; track role.id) {
+            @if (role.tasks.length) {
+              <optgroup [label]="role.title">
+                @for (task of role.tasks; track task.id) {
+                  <option [value]="task.id" [selected]="task.id === overrideTaskId()">{{ task.title }}</option>
+                }
+              </optgroup>
+            }
+          }
+          @if (event().tasks.length) {
+            <optgroup label="Общие задачи">
+              @for (task of event().tasks; track task.id) {
+                <option [value]="task.id" [selected]="task.id === overrideTaskId()">{{ task.title }}</option>
+              }
+            </optgroup>
+          }
+        </select>
+      </div>
+      @if (overrideTask(); as task) {
+        <p class="muted">{{ task.status === 'done' ? 'Задача выполнена' : 'Задача открыта' }}</p>
+        <label class="field">Причина исправления (обязательно)
+          <textarea #comment rows="2" maxlength="2000" required [disabled]="busy()" [value]="overrideComment()"
+            (input)="overrideComment.set(comment.value)"></textarea>
+        </label>
+        <div class="inline-actions">
+          <button class="button secondary" type="button" [disabled]="busy() || !overrideComment().trim()"
+            (click)="overrideTaskStatus()">{{ task.status === 'done' ? 'Вернуть к выполнению' : 'Подтвердить выполнение' }}</button>
+        </div>
+      }
+    </div>
+  </details>
+
+  <details class="edit-block">
+    <summary>Журнал действий</summary>
+    @if (view().audit.length) {
+      <ol class="compact">
+        @for (entry of view().audit; track entry.id) {
+          <li class="wrap">
+            <strong>{{ auditLabels[entry.action] || 'Обновление' }}</strong>
+            @if (entry.roleId) { · {{ pointTitle(entry.roleId) }} }
+            @if (auditDetail(entry); as details) { · {{ details }} }
+            <p class="muted small">{{ entry.actor }} · <time [attr.datetime]="entry.createdAt">{{ entry.createdAt | date:'dd.MM HH:mm':'+0300' }}</time></p>
+          </li>
+        }
+      </ol>
+    } @else {
+      <p class="muted">Действий пока нет.</p>
+    }
+  </details>
+}
+
+<ng-template #requestCard let-request let-active="active">
+  <article class="edit-block card" [class.priority]="active && request.type === 'sos'">
+    <h3 class="wrap">{{ requestHeading(request) }}</h3>
+    <p class="muted small">{{ requestStatus(request) }} · {{ request.author }} ·
+      <time [attr.datetime]="request.createdAt">{{ request.createdAt | date:'dd.MM HH:mm':'+0300' }}</time>
+    </p>
+    @if (request.messages.length) {
+      <ul class="compact">
+        @for (message of request.messages; track message.id) {
+          <li class="wrap preserve-lines"><strong>{{ message.author }}</strong> {{ message.text }}</li>
+        }
+      </ul>
+    }
+    @if (active) {
+      <label class="field">Ответ по обращению
+        <textarea #reply rows="2" maxlength="2000" [disabled]="busy()" [value]="replies()[request.id] ?? ''"
+          (input)="editReply(request.id, reply.value)"></textarea>
+      </label>
+      <div class="inline-actions">
+        <button class="button secondary" type="button" [disabled]="busy() || !replies()[request.id]?.trim()"
+          (click)="sendReply(request.id)">Ответить</button>
+        @if (requestCanBeAccepted(request)) {
+          <button class="button primary" type="button" [disabled]="busy()" (click)="dispatch({ action: 'accept-request', id: request.id })">Принять</button>
+        }
+        @if (request.type === 'sos' && request.status === 'in_progress') {
+          <button class="button primary" type="button" [disabled]="busy()" (click)="dispatch({ action: 'resolve-request', id: request.id })">Помощь оказана</button>
+        }
+        @if (request.type === 'question') {
+          <button class="button secondary" type="button" [disabled]="busy()" (click)="dispatch({ action: 'close-request', id: request.id })">Закрыть вопрос</button>
+        }
+        @if (request.type === 'report' && request.status === 'new') {
+          <button class="button secondary" type="button" [disabled]="busy()" (click)="dispatch({ action: 'view-request', id: request.id })">Отметить просмотренным</button>
+        }
+      </div>
+    }
+  </article>
+</ng-template>

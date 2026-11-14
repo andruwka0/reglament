@@ -230,6 +230,33 @@
   }
 
   <div class="event-grid">
+    @if (managedWorkflow()) {
+      <section class="panel workflow-access" aria-label="Вход в рабочий режим">
+        @if (workflow()?.actor; as actor) {
+          <span>{{ actor.isAdmin ? 'Координатор' : actor.username }}</span>
+          @if (actor.userId) {
+            <button type="button" class="button secondary" (click)="endTelegramLogin()">
+              Выйти из Telegram
+            </button>
+          }
+        } @else if (telegramLoginUrl(); as url) {
+          <span>Нажмите «Старт» у бота и вернитесь сюда.</span>
+          <a class="button primary" [href]="url" target="_blank" rel="noopener noreferrer"
+            >Открыть Telegram</a
+          >
+          <button type="button" class="button ghost" (click)="endTelegramLogin()">
+            Начать заново
+          </button>
+        } @else {
+          <button type="button" class="button primary" (click)="startTelegramLogin()">
+            Войти через Telegram
+          </button>
+        }
+        @if (workflowError()) {
+          <p class="notice error" role="alert">{{ workflowError() }}</p>
+        }
+      </section>
+    }
     @if (page() === 'tasks' && mobile()) {
       <section class="mobile-posts" aria-label="Посты и задачи">
         @if (participants().length) {
@@ -275,7 +302,7 @@
               </span>
             </span>
           </label>
-          @if (!personFilter()) {
+          @if (!personFilter() && !managedWorkflow()) {
             <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи и отправлять SOS.</p>
           }
         }
@@ -358,6 +385,7 @@
               <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: post.id }" />
             </header>
             <ng-container *ngTemplateOutlet="sosResult; context: { $implicit: post.id }" />
+            <ng-container *ngTemplateOutlet="workflowPoint; context: { $implicit: post.id }" />
             @if (post.description) {
               <p class="post-description">{{ post.description }}</p>
             }
@@ -421,7 +449,7 @@
           </div>
         </div>
 
-        @if (participants().length && !personFilter()) {
+        @if (participants().length && !personFilter() && !managedWorkflow()) {
           <p class="task-view-hint">Выберите свой ник, чтобы отмечать задачи и отправлять SOS.</p>
         }
 
@@ -453,6 +481,7 @@
               <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: role.id }" />
             </div>
             <ng-container *ngTemplateOutlet="sosResult; context: { $implicit: role.id }" />
+            <ng-container *ngTemplateOutlet="workflowPoint; context: { $implicit: role.id }" />
             <ul class="task-list">
               @for (task of role.tasks; track task.id) {
                 <ng-container *ngTemplateOutlet="taskRow; context: { $implicit: task }" />
@@ -494,7 +523,7 @@
             </div>
           </header>
 
-          @if (participants().length && !personFilter()) {
+          @if (participants().length && !personFilter() && !managedWorkflow()) {
             <p class="task-view-hint">
               Чтобы отмечать задачи, выберите свой ник в разделе «Задачи».
             </p>
@@ -666,7 +695,17 @@
 
   <ng-template #planSummary let-item>
     <span class="plan-title">{{ item.title }}</span>
-    @if (item.state !== 'untimed') {
+    @if (actualStages().get(item.id); as stage) {
+      @if (stage.status === 'started') {
+        <span class="plan-state">Началось в {{ stage.startedAt | date: 'HH:mm' : '+0300' }}</span>
+      } @else if (stage.status === 'finished') {
+        <span class="plan-state"
+          >Завершилось в {{ stage.finishedAt | date: 'HH:mm' : '+0300' }}</span
+        >
+      } @else {
+        <span class="plan-state">По плану</span>
+      }
+    } @else if (!managedWorkflow() && item.state !== 'untimed') {
       <span class="plan-state">{{ planLabel(item.state) }}</span>
     }
   </ng-template>
@@ -792,7 +831,7 @@
 </ng-template>
 
 <ng-template #sosControl let-roleId>
-  @if (ownRoleIds().has(roleId)) {
+  @if (!managedWorkflow() && ownRoleIds().has(roleId)) {
     @let key = sosKey(roleId);
     @let active = sosActive(key);
     <button
@@ -808,12 +847,24 @@
 </ng-template>
 
 <ng-template #sosResult let-roleId>
-  @if (ownRoleIds().has(roleId)) {
+  @if (!managedWorkflow() && ownRoleIds().has(roleId)) {
     @if (sosFeedback().get(sosKey(roleId)); as feedback) {
       <p class="sos-feedback" [attr.data-error]="feedback.error" role="status">
         {{ feedback.text }}
       </p>
     }
+  }
+</ng-template>
+
+<ng-template #workflowPoint let-roleId>
+  @if (workflow(); as view) {
+    <app-point-workflow
+      [view]="view"
+      [roleId]="roleId"
+      [busy]="workflowBusy()"
+      [lastAppliedAction]="lastAppliedAction()"
+      (action)="applyWorkflow($event)"
+    />
   }
 </ng-template>
 
