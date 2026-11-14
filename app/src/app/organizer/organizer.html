@@ -166,14 +166,14 @@
           @case ('notifications') {
             <h3>Рассылка в Telegram</h3>
             @if (telegram.hasValue() && telegram.value(); as info) {
-              <p class="muted">Подключили бота: {{ info.connected }} из {{ info.recipients }} участников, назначенных на задачи.</p>
+              <p class="muted">Уведомления получают {{ info.connected }} из {{ info.recipients }} участников мероприятия.</p>
               @if (info.botUrl; as url) {
                 <div class="inline-actions link-row">
                   <input #botLink aria-label="Ссылка на Telegram-бота для участников" readonly [value]="url">
                   <button class="button secondary" type="button" (click)="copy(url, botLink)">Копировать ссылку</button>
                   <a class="button ghost" [href]="url" target="_blank" rel="noopener noreferrer">Открыть бота</a>
                 </div>
-                <p class="muted">Для входа организатора отправьте боту <code>/admin</code> и введите пароль от сайта в личном чате с ботом.</p>
+                <p class="muted">Участнику достаточно один раз нажать «Старт» в личном чате с ботом. Команда <code>/admin</code> открывает вход организатора.</p>
                 @if (info.connected > 0) {
                   <label class="field" for="announcement-text">Текст объявления
                     <textarea id="announcement-text" rows="4" [formField]="announcementForm.text"></textarea>

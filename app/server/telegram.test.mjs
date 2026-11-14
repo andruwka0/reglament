@@ -13,7 +13,7 @@ const events = [
   { id: 'foreign', title: 'Закрытая встреча', roles: [{ ...assigned('@unused'), tasks: [assigned('@elsewhere')] }], tasks: [] },
 ]
 
-async function fixture(t) {
+async function fixture(t, { catalog = events, telegramCoordinatorId } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'reglament-telegram-'))
   const updates = []
   const sent = []
@@ -55,7 +55,7 @@ async function fixture(t) {
     assert.fail(`Timed out. Messages: ${JSON.stringify(sent)}`)
   }
   function start() {
-    bot = createTelegram({ token: 'mock-token', dataDir, publicOrigin: 'https://fixture.invalid', listEvents: () => events, getEvent: (id) => events.find((event) => event.id === id), verifyAdminPassword: (value) => value === 'fixture-admin-secret', fetchImpl, idleMs: 5 })
+    bot = createTelegram({ token: 'mock-token', dataDir, publicOrigin: 'https://fixture.invalid', listEvents: () => catalog, getEvent: (id) => catalog.find((event) => event.id === id), verifyAdminPassword: (value) => value === 'fixture-admin-secret', fetchImpl, idleMs: 5, telegramCoordinatorId })
     bot.start()
     return bot
   }
@@ -93,7 +93,7 @@ test('private participants switch assigned events and receive scoped plan and an
   assert.ok(picked.reply_markup.inline_keyboard.flat().some((button) => button.url === 'https://fixture.invalid/e/next?view=plan'))
   await qa.until(() => qa.replies(20, 'Регата').at(-1))
   assert.equal(bot.info(events[0]).connected, 2)
-  assert.equal(bot.info(events[2]).connected, 0)
+  await qa.until(() => bot.info(events[2]).connected === 1)
   assert.equal(qa.replies(40, '').length, 0)
 
   assert.deepEqual(bot.announce(events[0], 'Общий сбор'), { queued: 2, recipients: 4 })
@@ -109,6 +109,52 @@ test('private participants switch assigned events and receive scoped plan and an
   assert.equal(bot.info(events[0]).connected, 2)
   qa.message(10, 'Direct', '/start')
   await qa.until(() => qa.replies(10, 'Фестиваль').length === 2)
+})
+
+test('announcements and automatic plan notices reach all linked role and direct task assignees', { timeout: 10_000 }, async (t) => {
+  const event = { id: 'roster', title: 'Регата', roles: [
+    { ...assigned('@without_tasks'), tasks: [] },
+    { ...assigned('@overridden'), tasks: [assigned('@direct', '@common')] },
+    { assignee: '@legacy', tasks: [] },
+  ], tasks: [assigned('@common')] }
+  const later = { id: 'later', title: 'Фестиваль', roles: [], tasks: [assigned('@without_tasks')] }
+  const qa = await fixture(t, { catalog: [event, later] })
+  const bot = qa.start()
+  const laterLink = await qa.until(() => bot.info(later).botUrl)
+  qa.message(10, 'without_tasks', `/start ${new URL(laterLink).searchParams.get('start')}`)
+  qa.message(20, 'overridden', '/start')
+  qa.message(30, 'direct', '/start')
+  qa.message(40, 'common', '/start')
+  qa.message(50, 'legacy', '/start')
+  qa.message(60, 'unassigned', '/start')
+  await qa.until(() => qa.replies(10, '«Фестиваль»').length)
+  await qa.until(() => qa.replies(60, 'Пока у вас нет назначенных мероприятий').length)
+  assert.deepEqual(bot.info(event), { botUrl: bot.info(event).botUrl, recipients: 5, connected: 5 })
+  assert.deepEqual(bot.announce(event, 'Объявление для всей команды'), { queued: 5, recipients: 5 })
+  bot.notifyPlan(event)
+  for (const id of [10, 20, 30, 40, 50]) {
+    await qa.until(() => qa.replies(id, 'Объявление для всей команды').length === 1)
+    await qa.until(() => qa.replies(id, 'План изменился').length === 1)
+  }
+  assert.equal(qa.replies(60, 'Объявление для всей команды').length, 0)
+  assert.equal(qa.replies(60, 'План изменился').length, 0)
+})
+
+test('the configured Telegram coordinator keeps verified access when changing username', { timeout: 10_000 }, async (t) => {
+  const qa = await fixture(t, { telegramCoordinatorId: '50' })
+  const bot = qa.start()
+  qa.message(50, 'before', '/start')
+  await qa.until(() => qa.replies(50, 'Команды организатора').length === 1)
+  const actor = { userId: '50', username: '@before' }
+  assert.deepEqual(bot.currentActor(actor), actor)
+
+  qa.message(50, 'after', '/start')
+  await qa.until(() => qa.replies(50, 'Команды организатора').length === 2)
+  assert.deepEqual(bot.currentActor(actor), { userId: '50', username: '@after' })
+  qa.message(60, 'before', '/help')
+  await qa.until(() => qa.replies(60, 'Команды участника').length)
+  assert.equal(qa.replies(60, 'Команды организатора').length, 0)
+  assert.deepEqual(bot.currentActor(actor), { userId: '50', username: '@after' })
 })
 
 test('Telegram organizer password verifies by user ID and broadcasts only after confirmation', { timeout: 10_000 }, async (t) => {

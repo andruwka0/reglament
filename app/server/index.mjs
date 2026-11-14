@@ -6,7 +6,7 @@ import { extname, join, resolve, sep } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
 import { createTelegram } from './telegram.mjs'
-import { createTelegramLink } from './telegram-link.mjs'
+import { createTelegramLink, rememberForSeconds } from './telegram-link.mjs'
 import { createWorkflow, initialWorkflow, WorkflowError } from './workflow.mjs'
 
 const statuses = new Set(['todo', 'doing', 'blocked', 'done'])
@@ -522,6 +522,7 @@ async function staticFile(response, method, path, directory) {
 export function createTrackerServer({
   password, dataDir = 'data', staticDir = 'dist/regatta-tracker/browser', demo, secureCookie = false,
   telegramToken, publicOrigin = 'https://reglament.andruwka.site', telegramFactory = createTelegram,
+  telegramCoordinatorId,
 } = {}) {
   if (typeof password !== 'string' || (password.length < 12 && !/^[0-9]{4}$/.test(password))) {
     throw new Error('Задайте ADMIN_PASSWORD из четырёх цифр или длиной от 12 символов.')
@@ -531,12 +532,14 @@ export function createTrackerServer({
   const passwordHash = digest(password)
   const verifyAdminPassword = (value) => typeof value === 'string' && timingSafeEqual(passwordHash, digest(value))
   let telegramLink
+  const isTelegramCoordinator = (actor) => typeof telegramCoordinatorId === 'string' &&
+    /^[1-9]\d{0,15}$/.test(telegramCoordinatorId) && actor?.userId === telegramCoordinatorId
   const telegram = telegramToken ? telegramFactory({
     token: telegramToken, dataDir: resolve(dataDir), publicOrigin, verifyAdminPassword,
     listEvents: () => store.catalog().events, getEvent: store.getEvent,
-    confirmBrowser: (code, actor) => telegramLink.confirm(code, actor),
+    confirmBrowser: (code, actor) => telegramLink.confirm(code, actor), telegramCoordinatorId,
   }) : null
-  telegramLink = createTelegramLink(telegram)
+  telegramLink = createTelegramLink(telegram, { database: join(resolve(dataDir), 'regatta.sqlite') })
   const workflow = createWorkflow({ database: join(resolve(dataDir), 'regatta.sqlite'), getEvent: store.getEvent })
   const sessions = new Map()
   const loginAttempts = new Map()
@@ -552,6 +555,7 @@ export function createTrackerServer({
   function workflowActor(browser, isAdmin) {
     const linked = telegramLink.actor(browser)
     const actor = linked && telegram?.currentActor?.(linked)
+    isAdmin ||= isTelegramCoordinator(actor)
     return actor || isAdmin ? { ...actor, isAdmin } : null
   }
 
@@ -577,8 +581,9 @@ export function createTrackerServer({
     })
     eventStreams.set(response, { id, cookie, browser })
     response.once('close', () => eventStreams.delete(response))
-    writeStream(response, `retry: 3000\ndata: ${JSON.stringify(eventFor(event, workflowActor(browser, authenticated(cookie))))}\n\n`)
-    if (authenticated(cookie)) {
+    const actor = workflowActor(browser, authenticated(cookie))
+    writeStream(response, `retry: 3000\ndata: ${JSON.stringify(eventFor(event, actor))}\n\n`)
+    if (actor?.isAdmin) {
       for (const { eventId, alert, cancelled } of roleSosRequests.values()) {
         if (eventId === id && alert.expiresAt > Date.now()) {
           writeStream(response, `event: ${cancelled ? 'sos-cancelled' : 'sos'}\ndata: ${JSON.stringify(alert)}\n\n`)
@@ -591,9 +596,11 @@ export function createTrackerServer({
     let frame
     const scoped = !name && workflow.enabled(eventId)
     for (const [stream, { id, cookie, browser }] of eventStreams) {
-      if (id !== eventId || (name && name !== 'workflow' && !authenticated(cookie))) continue
+      if (id !== eventId) continue
+      const actor = scoped || (name && name !== 'workflow') ? workflowActor(browser, authenticated(cookie)) : null
+      if (name && name !== 'workflow' && !actor?.isAdmin) continue
       if (scoped) {
-        writeStream(stream, `data: ${JSON.stringify(eventFor(data, workflowActor(browser, authenticated(cookie))))}\n\n`)
+        writeStream(stream, `data: ${JSON.stringify(eventFor(data, actor))}\n\n`)
         continue
       }
       frame ??= `${name ? `event: ${name}\n` : ''}data: ${JSON.stringify(data)}\n\n`
@@ -741,9 +748,9 @@ export function createTrackerServer({
       throw new RequestError(403, 'Откройте трекер, чтобы изменить данные.')
     }
     const cookie = requestCookie(request)
-    const isAdmin = authenticated(cookie)
     const browser = requestCookie(request, telegramCookie)
-    const actor = workflowActor(browser, isAdmin)
+    const actor = workflowActor(browser, authenticated(cookie))
+    const isAdmin = actor?.isAdmin ?? false
     const token = requestToken(request)
     if (path === '/api/health' && method === 'GET') return writeJson(response, 200, { ok: true })
     if (path === '/api/admin/session' && method === 'GET') return writeJson(response, 200, { authenticated: isAdmin })
@@ -751,12 +758,18 @@ export function createTrackerServer({
     if (path === '/api/admin/logout' && method === 'POST') {
       sessions.delete(cookie)
       setSession(response, '', 0)
+      if (isTelegramCoordinator(actor)) {
+        const adminCookie = response.getHeader('Set-Cookie')
+        telegramLink.logout(browser)
+        setTelegramSession(response, '', 0)
+        response.setHeader('Set-Cookie', [adminCookie, response.getHeader('Set-Cookie')])
+      }
       return writeJson(response, 200, { authenticated: false })
     }
     if (path === '/api/telegram/login' && method === 'POST') {
       const started = telegramLink.start(browser)
       if (!started) throw new RequestError(503, 'Вход через Telegram пока недоступен.')
-      setTelegramSession(response, started.browser, 12 * 60 * 60)
+      setTelegramSession(response, started.browser, rememberForSeconds)
       return writeJson(response, 200, { url: started.url })
     }
     if (path === '/api/telegram/login' && method === 'DELETE') {
@@ -897,6 +910,7 @@ export function createTrackerServer({
     for (const stream of eventStreams.keys()) stream.destroy()
     eventStreams.clear()
     telegram?.close()
+    telegramLink.close()
     workflow.close()
     store.close()
   })
@@ -914,6 +928,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     staticDir: process.env.STATIC_DIR,
     secureCookie: process.env.SECURE_COOKIE === '1',
     telegramToken: process.env.TELEGRAM_BOT_TOKEN,
+    telegramCoordinatorId: process.env.TELEGRAM_COORDINATOR_ID,
     publicOrigin: process.env.PUBLIC_ORIGIN,
     demo,
   })

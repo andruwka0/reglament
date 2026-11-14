@@ -4,6 +4,7 @@ services:
     environment:
       ADMIN_PASSWORD: "${ADMIN_PASSWORD:?Set an ADMIN_PASSWORD with at least 12 characters or a four-digit PIN}"
       TELEGRAM_BOT_TOKEN: "${TELEGRAM_BOT_TOKEN:-}"
+      TELEGRAM_COORDINATOR_ID: "${TELEGRAM_COORDINATOR_ID:-}"
       PUBLIC_ORIGIN: "${PUBLIC_ORIGIN:-http://localhost:4177}"
       SECURE_COOKIE: "0"
     ports:

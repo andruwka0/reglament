@@ -377,6 +377,8 @@ export class EventBoard {
       .subscribe((view) => {
         const previous = this.workflow();
         this.workflow.set(view);
+        if (Boolean(view.actor?.isAdmin) !== this.organizerSession.authenticated())
+          void this.organizerSession.check().catch(() => undefined);
         if (view.actor?.isAdmin) this.notifyWorkflowSos(previous, view);
         if (view.actor?.username && view.actor.username !== previous?.actor?.username) {
           this.telegramLoginUrl.set(null);
@@ -716,7 +718,6 @@ export class EventBoard {
   }
 
   private showAlert(alert: BoardAlert, duration = alertDurationMs[alert.kind]) {
-    if (!this.organizerSession.authenticated()) return;
     this.dismissAlert(alert.key);
     this.alerts.update((alerts) => [alert, ...alerts]);
     this.alertTimers.set(

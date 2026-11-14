@@ -13,23 +13,19 @@ const participantCommands = '/start — открыть бота\n/events — в�
 const organizerCommands = `${participantCommands}\n/announce текст — отправить объявление\n/admin — войти как организатор\n/logout — выйти из кабинета`
 const organizerHelp = `Команды организатора\n${organizerCommands}`
 
-function taskRecipients(event) {
+function eventParticipants(event) {
   const people = (item) => item.assignees ?? (item.assignee ? [item.assignee] : [])
   const recipients = new Set(event.tasks.flatMap(people))
   for (const role of event.roles) {
-    for (const task of role.tasks) {
-      const direct = people(task)
-      for (const assignee of direct.length ? direct : people(role)) recipients.add(assignee)
-    }
+    for (const assignee of people(role)) recipients.add(assignee)
+    for (const assignee of role.tasks.flatMap(people)) recipients.add(assignee)
   }
   recipients.delete('')
   return recipients
 }
 
 function hasEventAccess(event, username, isOrganizer) {
-  return isOrganizer || Boolean(username && (taskRecipients(event).has(username) || event.roles.some((role) => (
-    role.assignees ? role.assignees.includes(username) : role.assignee === username
-  ))))
+  return isOrganizer || Boolean(username && eventParticipants(event).has(username))
 }
 
 function eventKey(id) {
@@ -51,6 +47,7 @@ class TelegramError extends Error {
 export function createTelegram({
   token, dataDir, database = join(dataDir, 'regatta.sqlite'), publicOrigin, listEvents, getEvent,
   verifyAdminPassword = () => false, confirmBrowser = () => false, fetchImpl = fetch, idleMs = 500,
+  telegramCoordinatorId,
 }) {
   const origin = new URL(publicOrigin)
   if (!['https:', 'http:'].includes(origin.protocol)) throw new Error('Некорректный публичный адрес трекера.')
@@ -85,7 +82,7 @@ export function createTelegram({
   const setState = db.prepare('INSERT INTO telegram_state VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
   const contact = db.prepare('SELECT * FROM telegram_contacts WHERE user_id = ?')
   const linked = db.prepare('SELECT user_id, chat_id, username FROM telegram_contacts WHERE username = ? AND reachable = 1')
-  const organizers = db.prepare('SELECT user_id, chat_id, username FROM telegram_contacts WHERE organizer_until > ? AND reachable = 1')
+  const organizers = db.prepare('SELECT user_id, chat_id, username FROM telegram_contacts WHERE (organizer_until > ? OR user_id = ?) AND reachable = 1')
   const releaseUsername = db.prepare('UPDATE telegram_contacts SET username = NULL WHERE username = ? AND user_id != ?')
   const clearUsername = db.prepare('UPDATE telegram_contacts SET username = NULL WHERE user_id = ? AND chat_id = ? AND username = ?')
   const saveContact = db.prepare(`
@@ -119,6 +116,7 @@ export function createTelegram({
   let offset = Number(state.get('offset')?.value ?? 0)
   let latestUpdateAt = Number(state.get('latestUpdateAt')?.value ?? 0)
   let started = false
+  const isTelegramCoordinator = (id) => !!telegramCoordinatorId && id === telegramCoordinatorId
 
   function transaction(callback) {
     db.exec('BEGIN IMMEDIATE')
@@ -157,7 +155,7 @@ export function createTelegram({
   }
 
   function recipientsFor(event) {
-    const recipients = taskRecipients(event)
+    const recipients = eventParticipants(event)
     return { recipients: recipients.size, contacts: [...recipients].map((person) => linked.get(person)).filter(Boolean) }
   }
 
@@ -276,6 +274,13 @@ export function createTelegram({
     if (message.forward_origin) return false
     const input = typeof message.text === 'string' ? message.text : ''
     const command = /^\/([a-z]+)(?:@[a-z0-9_]+)?(?:\s([\s\S]*))?$/i.exec(input)
+    const automatic = isTelegramCoordinator(user.user_id)
+    if (automatic && command?.[1].toLowerCase() === 'admin') {
+      savePrompt.run(0, user.user_id)
+      push(user, organizerHelp)
+      showEvents(user, true)
+      return Boolean(command[2]?.length)
+    }
     if (command?.[1].toLowerCase() === 'admin' && command[2]?.length) {
       verifyOrganizer(user, command[2])
       return true
@@ -301,7 +306,7 @@ export function createTelegram({
       saveOrganizer.run(0, user.user_id)
       selectEvent.run(null, user.user_id)
       removeDraft.run(user.user_id)
-      push(user, 'Кабинет организатора отключён.')
+      push(user, automatic ? 'Выбор мероприятия сброшен. Доступ координатора закреплён за вашим Telegram-аккаунтом.' : 'Кабинет организатора отключён.')
     } else if (action === 'announce') {
       if (isOrganizer) previewAnnouncement(user, command[2])
       else push(user, 'Рассылки доступны организатору. Для входа отправьте /admin.')
@@ -332,7 +337,7 @@ export function createTelegram({
     if (handle) releaseUsername.run(handle, id)
     saveContact.run(id, String(message.chat.id), handle)
     const user = contact.get(id)
-    const isOrganizer = user.organizer_until > Date.now()
+    const isOrganizer = user.organizer_until > Date.now() || isTelegramCoordinator(id)
     if (callback) {
       if (typeof callback.data === 'string') handleCallback(user, callback.data, isOrganizer)
       return () => call('answerCallbackQuery', { callback_query_id: callback.id })
@@ -439,10 +444,12 @@ export function createTelegram({
     const user = contact.get(job.user_id)
     if (!user?.reachable || user.chat_id !== job.chat_id) return false
     if (!job.event_id) return true
-    if (job.audience === 'organizers') return user.organizer_until > Date.now() && Boolean(safeGetEvent(job.event_id))
+    if (job.audience === 'organizers') {
+      return (user.organizer_until > Date.now() || isTelegramCoordinator(user.user_id)) && Boolean(safeGetEvent(job.event_id))
+    }
     if (user.username !== job.username) return false
     const event = safeGetEvent(job.event_id)
-    return Boolean(event && (job.audience === 'workflow' ? hasEventAccess(event, job.username, false) : taskRecipients(event).has(job.username)))
+    return Boolean(event && eventParticipants(event).has(job.username))
   }
 
   return {
@@ -467,6 +474,7 @@ export function createTelegram({
     },
     currentActor(actor) {
       const user = contact.get(actor.userId)
+      if (user && isTelegramCoordinator(user.user_id)) return { ...actor, username: user.username }
       return user?.username === actor.username ? actor : null
     },
     announce,
@@ -482,7 +490,7 @@ export function createTelegram({
           sent.add(recipient.user_id)
           push(recipient, `${event.title}\n${text}`, eventButtons(event), event, 'workflow')
         }
-        if (coordinators) for (const recipient of organizers.all(Date.now())) {
+        if (coordinators) for (const recipient of organizers.all(Date.now(), telegramCoordinatorId ?? null)) {
           if (!sent.has(recipient.user_id)) push(recipient, `${event.title}\n${text}`, eventButtons(event), event, 'organizers')
         }
       })

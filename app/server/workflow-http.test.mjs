@@ -13,6 +13,7 @@ test('Telegram browser login is one-time and workflow mutations require verified
   const task = role.tasks[2]
   const seniorActor = { userId: '1001', username: role.assignee }
   const volunteerActor = { userId: '1002', username: role.tasks[2].assignee }
+  const coordinator = { userId: '1003', username: '@coordinator' }
   const path = `/api/events/${demo.id}`
   const workflow = `${path}/workflow`
   const status = `${path}/tasks/${task.id}/status`
@@ -21,6 +22,7 @@ test('Telegram browser login is one-time and workflow mutations require verified
   let confirmBrowser
   const server = createTrackerServer({
     password, dataDir, demo, telegramToken: 'test-token', secureCookie: true,
+    telegramCoordinatorId: coordinator.userId,
     telegramFactory(options) {
       confirmBrowser = options.confirmBrowser
       return {
@@ -59,8 +61,9 @@ test('Telegram browser login is one-time and workflow mutations require verified
         const chunks = []
         response.on('data', (chunk) => chunks.push(chunk))
         response.on('end', () => {
-          const setCookie = response.headers['set-cookie']?.[0]
-          resolve({ status: response.statusCode, data: JSON.parse(Buffer.concat(chunks)), setCookie, cookie: setCookie?.split(';')[0] })
+          const cookies = response.headers['set-cookie'] ?? []
+          const [setCookie] = cookies
+          resolve({ status: response.statusCode, data: JSON.parse(Buffer.concat(chunks)), cookies, setCookie, cookie: setCookie?.split(';')[0] })
         })
         response.on('error', reject)
       })
@@ -89,6 +92,7 @@ test('Telegram browser login is one-time and workflow mutations require verified
   const seniorLogin = await post('/api/telegram/login')
   const volunteerLogin = await post('/api/telegram/login')
   assert.equal(seniorLogin.status, 200)
+  assert.match(seniorLogin.setCookie, /Max-Age=2592000/)
   assert.match(seniorLogin.setCookie, /HttpOnly.*SameSite=(?:Strict|Lax).*Secure/)
   assert.notEqual(seniorLogin.cookie, volunteerLogin.cookie)
   assert.equal((await request(workflow, { cookie: seniorLogin.cookie })).data.actor, null)
@@ -120,4 +124,23 @@ test('Telegram browser login is one-time and workflow mutations require verified
   assert.deepEqual((await request(workflow, { cookie: volunteerLogin.cookie })).data.requests, [])
   assert.equal((await request('/api/telegram/login', { method: 'DELETE', cookie: seniorLogin.cookie })).status, 200)
   assert.equal((await request(workflow, { cookie: seniorLogin.cookie })).data.actor, null)
+
+  const catalog = '/api/admin/catalog'
+  assert.equal((await request(catalog, { cookie: volunteerLogin.cookie })).status, 401)
+  const coordinatorLogin = await post('/api/telegram/login')
+  const coordinatorSession = { cookie: coordinatorLogin.cookie }
+  assert.equal((await request(catalog, coordinatorSession)).status, 401)
+  assert.equal(confirmBrowser(codeFrom(coordinatorLogin), coordinator), true)
+  assert.deepEqual((await request('/api/admin/session', coordinatorSession)).data, { authenticated: true })
+  assert.deepEqual((await request(workflow, coordinatorSession)).data.actor, { ...coordinator, isAdmin: true })
+  const created = await post('/api/admin/events', { title: 'Новое мероприятие', date: '' }, coordinatorSession.cookie)
+  assert.equal(created.status, 201)
+  assert.ok((await request(catalog, coordinatorSession)).data.events.some((event) => event.id === created.data.id))
+  const newWorkflow = `/api/events/${created.data.id}/workflow`
+  assert.equal((await request(newWorkflow, coordinatorSession)).data.actor.isAdmin, true)
+  assert.equal((await post(newWorkflow, { action: 'enable' }, coordinatorSession.cookie)).status, 200)
+  const logout = await post('/api/admin/logout', undefined, coordinatorSession.cookie)
+  assert.equal(logout.cookies.length, 2)
+  assert.ok(logout.cookies.every((cookie) => cookie.includes('Max-Age=0')))
+  assert.equal((await request(catalog, coordinatorSession)).status, 401)
 })

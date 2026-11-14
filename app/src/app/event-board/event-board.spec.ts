@@ -122,7 +122,10 @@ function render(
           sosStatus,
         },
       },
-      { provide: OrganizerSession, useValue: { authenticated: () => authenticated } },
+      {
+        provide: OrganizerSession,
+        useValue: { authenticated: () => authenticated, check: () => Promise.resolve(authenticated) },
+      },
     ],
   });
   const fixture = TestBed.createComponent(EventBoard);
@@ -153,12 +156,11 @@ function render(
 describe('EventBoard', () => {
   afterEach(() => window.localStorage.removeItem('reglament-person:regatta'));
 
-  it('opens the day plan from Telegram and exposes the notification subscription', () => {
+  it('opens the day plan from Telegram and shows login in the event navigation', () => {
     const { board } = render(null, event, false, 'plan');
     expect(board.querySelector('#plan-title')?.textContent).toContain('План дня');
-    expect(board.querySelector('a[href^="https://t.me/test_bot"]')?.textContent).toContain(
-      'Подключить уведомления в Telegram',
-    );
+    expect(board.querySelector('.event-dock [aria-label="Войти через Telegram"]')).not.toBeNull();
+    expect(board.querySelector('a[href^="https://t.me/test_bot"]')).toBeNull();
   });
 
   it('highlights the planned stage by Moscow time while actual times are unavailable', () => {

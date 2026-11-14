@@ -194,7 +194,7 @@
       </svg>
       <span>Важное</span>
     </button>
-    @if (managedWorkflow() && !workflow()?.actor) {
+    @if ((managedWorkflow() || botUrl()) && !workflow()?.actor && !organizerSession.authenticated()) {
       @if (telegramLoginUrl(); as url) {
         <a
           class="event-dock-tab event-dock-login"
@@ -255,7 +255,7 @@
   }
 
   <div class="event-grid">
-    @if (managedWorkflow() && (workflow()?.actor || telegramLoginUrl() || workflowError())) {
+    @if (workflow()?.actor?.userId || (managedWorkflow() && workflow()?.actor) || telegramLoginUrl() || workflowError()) {
       <section class="workflow-access" aria-label="Вход в рабочий режим">
         @if (workflow()?.actor; as actor) {
           <span>{{ actor.isAdmin ? 'Координатор' : actor.username }}</span>
@@ -770,11 +770,6 @@
   </ng-template>
 
   <ng-template #infoContent>
-    @if (botUrl(); as url) {
-      <a class="button secondary" [href]="url" target="_blank" rel="noopener noreferrer">
-        Подключить уведомления в Telegram
-      </a>
-    }
     @if (board.description) {
       <p class="event-intro">{{ board.description }}</p>
     }
@@ -799,7 +794,7 @@
           </div>
         }
       </div>
-    } @else if (!board.description && !botUrl()) {
+    } @else if (!board.description) {
       <p class="muted">Важная информация пока не добавлена.</p>
     }
   </ng-template>
