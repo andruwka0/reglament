@@ -90,7 +90,7 @@ test('private participants switch assigned events and receive scoped plan and an
   assert.deepEqual(buttons.map((button) => button.text), ['Регата', 'Фестиваль'])
   qa.callback(10, 'Direct', buttons[1].callback_data)
   const picked = await qa.until(() => qa.replies(10, 'Фестиваль').at(-1))
-  assert.ok(picked.reply_markup.inline_keyboard.flat().some((button) => button.url === 'https://fixture.invalid/e/next?view=plan'))
+  assert.ok(picked.reply_markup.inline_keyboard.flat().some((button) => button.text === 'План в Telegram' && button.callback_data.startsWith('plan:')))
   await qa.until(() => qa.replies(20, 'Регата').at(-1))
   assert.equal(bot.info(events[0]).connected, 2)
   await qa.until(() => bot.info(events[2]).connected === 1)
@@ -109,6 +109,60 @@ test('private participants switch assigned events and receive scoped plan and an
   assert.equal(bot.info(events[0]).connected, 2)
   qa.message(10, 'Direct', '/start')
   await qa.until(() => qa.replies(10, 'Фестиваль').length === 2)
+})
+
+test('participants receive timeline text by command and button only for accessible events', { timeout: 10_000 }, async (t) => {
+  const event = {
+    ...events[0], date: '2026-11-15', location: 'НИУ ВШЭ', timeline: [
+      { title: 'Финал', start: '20:30', end: '' },
+      { title: 'Регистрация', start: '15:30', end: '16:30', description: 'Первый этаж' },
+      { title: 'Сбор команды', start: '', end: '14:00' },
+      { title: 'Готовность постов', start: '15:30', end: '15:30' },
+      { title: 'Уборка', start: '', end: '' },
+    ],
+  }
+  const qa = await fixture(t, { catalog: [event, ...events.slice(1)], telegramCoordinatorId: '60' })
+  qa.start()
+  qa.message(10, 'direct', '/plan')
+  const choice = await qa.until(() => qa.replies(10, 'Выберите мероприятие').at(-1))
+  const options = choice.reply_markup.inline_keyboard.flat()
+  assert.deepEqual(options.map((button) => button.text), ['Регата', 'Фестиваль'])
+  qa.callback(10, 'direct', options[0].callback_data)
+  const plan = await qa.until(() => qa.replies(10, 'План · Регата').at(-1))
+  assert.match(plan.text, /15 ноября 2026 г\. · НИУ ВШЭ\nВремя московское/)
+  assert.match(plan.text, /До 14:00 · Сбор команды\s+15:30–16:30 · Регистрация\nПервый этаж\s+15:30 · Готовность постов\s+С 20:30 · Финал\s+• Уборка/)
+  assert.ok(plan.reply_markup.inline_keyboard.flat().some((button) => button.url === 'https://fixture.invalid/e/meeting?view=plan'))
+  qa.message(10, 'direct', '/plan')
+  await qa.until(() => qa.replies(10, 'План · Регата').length === 2)
+
+  qa.message(20, 'inherited', '/start')
+  const selected = await qa.until(() => qa.replies(20, 'Выбрано мероприятие').at(-1))
+  const button = selected.reply_markup.inline_keyboard.flat().find((button) => button.text === 'План в Telegram')
+  qa.callback(20, 'inherited', button.callback_data)
+  await qa.until(() => qa.replies(20, 'План · Регата').length)
+  qa.callback(30, 'outsider', button.callback_data)
+  await qa.until(() => qa.replies(30, 'Пока у вас нет назначенных мероприятий').length)
+  assert.equal(qa.replies(30, 'План · Регата').length, 0)
+  qa.message(40, 'inherited', '/plan', 'group')
+  assert.equal(qa.replies(40, '').length, 0)
+
+  qa.message(60, 'admin', '/plan')
+  const adminChoice = await qa.until(() => qa.replies(60, 'Выберите мероприятие').at(-1))
+  qa.callback(60, 'admin', adminChoice.reply_markup.inline_keyboard.flat().find((button) => button.text === 'Закрытая встреча').callback_data)
+  await qa.until(() => qa.replies(60, 'Расписание пока не добавлено.').length)
+})
+
+test('long Telegram plans keep all text in messages within the size limit', { timeout: 10_000 }, async (t) => {
+  const description = `${'🚩'.repeat(2450)}Последняя строка`
+  const event = { ...events[0], timeline: [{ title: 'Сбор', start: '15:30', end: '', description }] }
+  const qa = await fixture(t, { catalog: [event] })
+  qa.start()
+  qa.message(10, 'direct', '/plan')
+  await qa.until(() => qa.replies(10, 'Последняя строка').length)
+  const messages = qa.replies(10, '')
+  assert.equal(messages.length, 2)
+  assert.ok(messages.every(({ text }) => text.length <= 4096 && text.isWellFormed()))
+  assert.ok(messages.map(({ text }) => text).join('').endsWith(description))
 })
 
 test('announcements and automatic plan notices reach all linked role and direct task assignees', { timeout: 10_000 }, async (t) => {

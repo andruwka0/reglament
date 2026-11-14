@@ -7,11 +7,13 @@ const authLifetime = 12 * 60 * 60 * 1000
 const attemptWindow = 15 * 60 * 1000
 const draftLifetime = 10 * 60 * 1000
 const maxAnnouncementLength = 3000
+const maxMessageLength = 4096
 const pageSize = 20
 const offsetResetMs = 6 * 24 * 60 * 60 * 1000
-const participantCommands = '/start — открыть бота\n/events — выбрать мероприятие\n/plan — открыть план\n/help — показать команды'
+const participantCommands = '/start — открыть бота\n/events — выбрать мероприятие\n/plan — получить расписание в чате\n/help — показать команды'
 const organizerCommands = `${participantCommands}\n/announce — начать рассылку\n/cancel — отменить рассылку\n/admin — войти как организатор\n/logout — выйти из кабинета`
 const organizerHelp = `Команды организатора\n${organizerCommands}`
+const planDate = new Intl.DateTimeFormat('ru-RU', { dateStyle: 'long', timeZone: 'UTC' })
 
 function eventParticipants(event) {
   const people = (item) => item.assignees ?? (item.assignee ? [item.assignee] : [])
@@ -30,6 +32,40 @@ function hasEventAccess(event, username, isOrganizer) {
 
 function eventKey(id) {
   return createHash('sha256').update(id).digest('base64url').slice(0, 24)
+}
+
+function planText(event) {
+  const details = [event.date && planDate.format(new Date(`${event.date}T00:00:00Z`)), event.location].filter(Boolean)
+  const schedule = (event.timeline ?? []).toSorted((a, b) =>
+    (a.start || a.end || '24:00').localeCompare(b.start || b.end || '24:00'))
+  const simultaneous = new Set(schedule.filter(({ start, end }) => start && end && start !== end).map(({ start }) => start))
+  const rows = schedule.map(({ start, end, title, description }) => {
+    let time = start
+    if (start && end && start !== end) time = `${start}–${end}`
+    else if (start && !end && !simultaneous.has(start)) time = `С ${start}`
+    else if (!start && end) time = `До ${end}`
+    return `${time ? `${time} · ` : '• '}${title}${description ? `\n${description}` : ''}`
+  })
+  return [
+    `План · ${event.title}`,
+    ...(details.length ? [details.join(' · ')] : []),
+    ...(schedule.some(({ start, end }) => start || end) ? ['Время московское'] : []),
+    '',
+    rows.length ? rows.join('\n\n') : 'Расписание пока не добавлено.',
+  ].join('\n')
+}
+
+function splitTelegramText(text) {
+  const parts = []
+  while (text.length > maxMessageLength) {
+    let boundary = text.lastIndexOf('\n', maxMessageLength)
+    if (boundary < maxMessageLength / 2) boundary = maxMessageLength
+    if (/[\uD800-\uDBFF]/.test(text[boundary - 1])) boundary--
+    parts.push(text.slice(0, boundary))
+    text = text.slice(text[boundary] === '\n' ? boundary + 1 : boundary)
+  }
+  if (text) parts.push(text)
+  return parts
 }
 
 function telegramUsername(value) {
@@ -198,7 +234,7 @@ export function createTelegram({
     return listEvents().filter((event) => hasEventAccess(event, user.username, isOrganizer))
   }
 
-  function showEvents(user, isOrganizer, page = 0, help = '') {
+  function showEvents(user, isOrganizer, page = 0, help = '', forPlan = false) {
     const events = availableEvents(user, isOrganizer)
     const prefix = help ? `${help}\n\n` : ''
     if (!events.length) {
@@ -210,17 +246,22 @@ export function createTelegram({
     const lastPage = Math.ceil(events.length / pageSize) - 1
     const index = Math.min(page, lastPage)
     const buttons = events.slice(index * pageSize, (index + 1) * pageSize)
-      .map((event) => [{ text: event.title, callback_data: `event:${eventKey(event.id)}` }])
+      .map((event) => [{ text: event.title, callback_data: `${forPlan ? 'plan' : 'event'}:${eventKey(event.id)}` }])
     const paging = []
-    if (index > 0) paging.push({ text: 'Назад', callback_data: `events:${index - 1}` })
-    if (index < lastPage) paging.push({ text: 'Далее', callback_data: `events:${index + 1}` })
+    const pageAction = forPlan ? 'plan-events' : 'events'
+    if (index > 0) paging.push({ text: 'Назад', callback_data: `${pageAction}:${index - 1}` })
+    if (index < lastPage) paging.push({ text: 'Далее', callback_data: `${pageAction}:${index + 1}` })
     if (paging.length) buttons.push(paging)
     push(user, `${prefix}Выберите мероприятие.`, buttons)
   }
 
   function chooseEvent(user, event, isOrganizer, help = '') {
     selectEvent.run(event.id, user.user_id)
-    const buttons = [...eventButtons(event), [{ text: 'Сменить мероприятие', callback_data: 'events:0' }]]
+    const buttons = [
+      [{ text: 'План в Telegram', callback_data: `plan:${eventKey(event.id)}` }],
+      ...eventButtons(event),
+      [{ text: 'Сменить мероприятие', callback_data: 'events:0' }],
+    ]
     const guidance = help ? `\n\n${help}` : isOrganizer ? '\nНачать рассылку: /announce' : ''
     push(user, `Выбрано мероприятие «${event.title}».${guidance}`, buttons)
     const pending = isOrganizer && readDraft.get(user.user_id, '', Date.now())
@@ -229,6 +270,16 @@ export function createTelegram({
       removeDraft.run(user.user_id)
       push(user, 'Мероприятие изменилось. Для новой рассылки отправьте /announce.')
     }
+  }
+
+  function sendPlan(user, event, isOrganizer) {
+    if (!currentEvent(user, isOrganizer)) selectEvent.run(event.id, user.user_id)
+    const audience = isOrganizer ? 'organizers' : 'participants'
+    const parts = splitTelegramText(planText(event))
+    parts.forEach((part, index) => {
+      const buttons = index === parts.length - 1 ? eventButtons(event) : null
+      push(user, part, buttons, event, audience)
+    })
   }
 
   function verifyOrganizer(user, password) {
@@ -275,9 +326,14 @@ export function createTelegram({
 
   function handleCallback(user, value, isOrganizer) {
     const [action, key] = value.split(':')
-    if (action === 'events' && /^\d{1,8}$/.test(key)) return showEvents(user, isOrganizer, Number(key))
-    if (action === 'event') {
+    if ((action === 'events' || action === 'plan-events') && /^\d{1,8}$/.test(key)) {
+      return showEvents(user, isOrganizer, Number(key), '', action === 'plan-events')
+    }
+    if (action === 'event' || action === 'plan') {
       const selected = availableEvents(user, isOrganizer).find((event) => eventKey(event.id) === key)
+      if (action === 'plan') {
+        return selected ? sendPlan(user, selected, isOrganizer) : showEvents(user, isOrganizer, 0, '', true)
+      }
       if (selected) return chooseEvent(user, selected, isOrganizer)
       return showEvents(user, isOrganizer)
     }
@@ -349,9 +405,15 @@ export function createTelegram({
       push(user, removed ? 'Рассылка отменена.' : 'Нет активной рассылки.')
     } else if (action === 'events') {
       showEvents(user, isOrganizer)
+    } else if (action === 'plan') {
+      const selected = currentEvent(user, isOrganizer)
+      if (selected) return sendPlan(user, selected, isOrganizer)
+      const available = availableEvents(user, isOrganizer)
+      if (available.length === 1) return sendPlan(user, available[0], isOrganizer)
+      showEvents(user, isOrganizer, 0, '', true)
     } else if (action === 'help') {
       push(user, isOrganizer ? organizerHelp : `Команды участника\n${participantCommands}`)
-    } else if (action === 'start' || action === 'plan' || input) {
+    } else if (action === 'start' || input) {
       const events = availableEvents(user, isOrganizer)
       const deepLink = action === 'start' ? command[2]?.match(/^event_([A-Za-z0-9_-]+)$/)?.[1] : null
       const selected = (deepLink && events.find((event) => eventKey(event.id) === deepLink)) ||
