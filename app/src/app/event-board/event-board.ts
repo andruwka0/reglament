@@ -116,6 +116,11 @@ export class EventBoard {
     return event ? eventCoverUrl(event) : null;
   });
   protected readonly tab = signal<'roles' | 'common'>('roles');
+  protected readonly commonPostId = COMMON_POST_ID;
+  protected readonly signedInViaTelegram = computed(() => !!this.workflow()?.actor?.userId);
+  protected readonly taskTabsEnabled = computed(
+    () => !this.personFilter() || this.signedInViaTelegram(),
+  );
   protected readonly roleFilter = signal('');
   protected readonly personFilter = signal('');
   protected readonly loadingError = signal('');
@@ -130,13 +135,12 @@ export class EventBoard {
       !this.personFilter() ||
       this.personFilter() !== workflow.actor?.username
     ) {
-      return buildPosts(event, this.personFilter());
+      return buildPosts(event, this.personFilter(), this.signedInViaTelegram());
     }
     const ownRoles = new Set(workflow.points.map((point) => point.roleId));
-    const assignedCommon = buildPosts(event, this.personFilter()).filter(
-      (post) => post.id === COMMON_POST_ID,
+    return buildPosts(event, '').filter(
+      (post) => post.id === COMMON_POST_ID || ownRoles.has(post.id),
     );
-    return [...buildPosts(event, '').filter((post) => ownRoles.has(post.id)), ...assignedCommon];
   });
   protected readonly activePost = computed(
     () => this.posts().find((post) => post.id === this.selectedPostId()) ?? this.posts()[0],
@@ -227,10 +231,10 @@ export class EventBoard {
   });
   protected readonly groups = computed(() => {
     const groups = this.personGroups();
-    if (this.personFilter()) return groups;
-    if (this.tab() === 'common') return groups.slice(-1);
+    if (!this.taskTabsEnabled()) return groups;
+    if (this.tab() === 'common') return this.taskGroups().slice(-1);
 
-    const roles = groups.slice(0, -1);
+    const roles = groups.filter((role) => role.id !== COMMON_POST_ID);
     const role = roles.find((candidate) => candidate.id === this.roleFilter());
     return role ? [role] : roles;
   });

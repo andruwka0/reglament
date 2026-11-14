@@ -352,7 +352,9 @@
                   <span class="post-card-main">
                     <span class="post-card-title-row">
                       <span class="post-card-name">{{ post.title }}</span>
-                      @if (personFilter() && activePost()?.id === post.id) {
+                      @if (
+                        post.id !== commonPostId && personFilter() && activePost()?.id === post.id
+                      ) {
                         <span class="post-card-label">Ваш пост</span>
                       }
                     </span>
@@ -383,8 +385,12 @@
           />
           <section class="post-tasks" aria-labelledby="post-tasks-title">
             <header class="post-tasks-heading">
-              <h2 id="post-tasks-title">Задачи поста</h2>
-              <span class="sr-only">{{ post.title }}</span>
+              <h2 id="post-tasks-title">
+                {{ post.id === commonPostId ? 'Общие задачи' : 'Задачи поста' }}
+              </h2>
+              @if (post.id !== commonPostId) {
+                <span class="sr-only">{{ post.title }}</span>
+              }
               <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: post.id }" />
             </header>
             <ng-container *ngTemplateOutlet="sosResult; context: { $implicit: post.id }" />
@@ -413,9 +419,9 @@
             <button
               class="tab"
               type="button"
-              [class.active]="!personFilter() && tab() === 'roles'"
-              [attr.aria-pressed]="!personFilter() && tab() === 'roles'"
-              [disabled]="!!personFilter()"
+              [class.active]="taskTabsEnabled() && tab() === 'roles'"
+              [attr.aria-pressed]="taskTabsEnabled() && tab() === 'roles'"
+              [disabled]="!taskTabsEnabled()"
               (click)="tab.set('roles')"
             >
               Роли
@@ -423,9 +429,9 @@
             <button
               class="tab"
               type="button"
-              [class.active]="!personFilter() && tab() === 'common'"
-              [attr.aria-pressed]="!personFilter() && tab() === 'common'"
-              [disabled]="!!personFilter()"
+              [class.active]="taskTabsEnabled() && tab() === 'common'"
+              [attr.aria-pressed]="taskTabsEnabled() && tab() === 'common'"
+              [disabled]="!taskTabsEnabled()"
               aria-label="Общие задачи"
               (click)="tab.set('common')"
             >

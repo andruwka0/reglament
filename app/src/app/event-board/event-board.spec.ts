@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Event, Task } from '../event.model';
 import { OrganizerSession } from '../organizer-session';
 import { TrackerApi, type RoleSos } from '../tracker-api';
+import type { WorkflowView } from '../workflow.model';
 import { EventBoard } from './event-board';
 
 const assigned: Task = {
@@ -53,6 +54,7 @@ function render(
   initialEvent = event,
   authenticated = false,
   view?: string,
+  workflow?: WorkflowView,
 ) {
   const loadEvent = vi.fn().mockReturnValue(of(initialEvent));
   const queryParamMap = convertToParamMap(view ? { view } : {});
@@ -94,15 +96,17 @@ function render(
           event: loadEvent,
           eventBot: () => of({ botUrl: 'https://t.me/test_bot?start=event_regatta' }),
           workflow: () =>
-            of({
-              enabled: false,
-              actor: null,
-              points: [],
-              commands: [],
-              requests: [],
-              audit: [],
-              stages: [],
-            }),
+            of(
+              workflow ?? {
+                enabled: false,
+                actor: null,
+                points: [],
+                commands: [],
+                requests: [],
+                audit: [],
+                stages: [],
+              },
+            ),
           liveEvent: (
             _id: string,
             onSos: (request: RoleSos) => void,
@@ -238,6 +242,48 @@ describe('EventBoard', () => {
     );
     expect(board.querySelector('button.task-check')).toBeNull();
     expect(updateStatus).not.toHaveBeenCalled();
+  });
+
+  it('keeps all common tasks accessible alongside a signed-in senior’s post', () => {
+    const login = '@organizer';
+    const { board, fixture } = render(null, { ...event, managedWorkflow: true }, false, undefined, {
+      enabled: true,
+      actor: { username: login, userId: '1', isAdmin: false },
+      points: [
+        {
+          roleId: 'welcome',
+          title: 'Регистрация',
+          kind: 'general',
+          status: 'preparation',
+          version: 1,
+          senior: login,
+          seniorSource: 'default',
+          proposal: null,
+          member: true,
+          isSenior: true,
+          canManage: true,
+        },
+      ],
+      commands: [],
+      requests: [],
+      audit: [],
+      stages: [],
+    });
+    const person = board.querySelector<HTMLSelectElement>('.person-filter select')!;
+    const commonTab = board.querySelector<HTMLButtonElement>('button[aria-label="Общие задачи"]')!;
+    expect(person.value).toBe(login);
+    expect(commonTab.disabled).toBe(false);
+    expect(board.querySelector('.task-check')).not.toBeNull();
+    commonTab.click();
+    fixture.detectChanges();
+    expect(person.value).toBe(login);
+    expect(board.querySelector('.task-main h3')?.textContent).toContain(common.title);
+    expect(board.querySelector('button.task-check')).toBeNull();
+    [...board.querySelectorAll<HTMLButtonElement>('button.tab')]
+      .find((button) => button.textContent?.trim() === 'Роли')!
+      .click();
+    fixture.detectChanges();
+    expect(board.querySelector('.role-card h2')?.textContent).toContain('Регистрация');
   });
 
   it('can focus on one role and return to all roles', () => {

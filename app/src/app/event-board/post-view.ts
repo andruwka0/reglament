@@ -20,7 +20,7 @@ export function taskAssignedTo(task: Task, rolePeople: readonly string[], person
   return (direct.length ? direct : rolePeople).includes(person);
 }
 
-export function buildPosts(event: Event, person: string): Post[] {
+export function buildPosts(event: Event, person: string, showAllCommon = false): Post[] {
   const posts: Post[] = [];
 
   for (const role of event.roles) {
@@ -33,7 +33,7 @@ export function buildPosts(event: Event, person: string): Post[] {
     }
   }
 
-  const common = person
+  const common = person && !showAllCommon
     ? event.tasks.filter((task) => taskAssignedTo(task, [], person))
     : event.tasks;
   if (common.length) {
