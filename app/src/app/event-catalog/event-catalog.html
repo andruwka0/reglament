@@ -1,0 +1,65 @@
+<section class="event-catalog" aria-labelledby="events-heading">
+  <h1 id="events-heading">Мероприятия</h1>
+
+  @if (events.isLoading()) {
+    <p class="notice" role="status">Загружаем мероприятия…</p>
+  } @else if (events.error()) {
+    <div class="notice error catalog-error">
+      <p role="alert">Не удалось загрузить мероприятия.</p>
+      <button type="button" class="button secondary" (click)="events.reload()">Повторить</button>
+    </div>
+  } @else if (rows().length) {
+    <ul class="event-list" role="list">
+      @for (event of rows(); track event.id) {
+        <li>
+          <a class="event-entry" [routerLink]="['/e', event.id]">
+            <span class="event-thumb" aria-hidden="true">
+              @if (event.coverUrl) {
+                <img [src]="event.coverUrl" alt="" width="52" height="52" loading="lazy" />
+              } @else {
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.65"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <rect x="4" y="5.5" width="16" height="14.5" rx="3" />
+                  <path d="M8 4v3m8-3v3M4 10h16m-11 4h2m3 0h1" />
+                </svg>
+              }
+            </span>
+            <div class="event-entry-copy">
+              <h2>{{ event.title }}</h2>
+              <div class="event-entry-meta">
+                @if (event.dateLabel) {
+                  <time [attr.datetime]="event.date">{{ event.dateLabel }}</time>
+                } @else {
+                  <span>Дата уточняется</span>
+                }
+                @if (event.location) {
+                  <span>{{ event.location }}</span>
+                }
+              </div>
+            </div>
+            <svg
+              class="event-entry-arrow"
+              aria-hidden="true"
+              viewBox="0 0 20 20"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="m8 5 5 5-5 5" />
+            </svg>
+          </a>
+        </li>
+      }
+    </ul>
+  } @else {
+    <p class="empty-state">Пока нет мероприятий.</p>
+  }
+</section>

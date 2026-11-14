@@ -25,10 +25,8 @@ export class App {
     { initialValue: this.router.url },
   );
 
-  protected readonly eventPath = computed(() => {
-    const path = this.url().split(/[?#]/, 1)[0];
-    return path.startsWith('/e/') ? path : '';
-  });
+  protected readonly path = computed(() => this.url().split(/[?#]/, 1)[0]);
+  protected readonly eventPath = computed(() => this.path().startsWith('/e/') ? this.path() : '');
   protected readonly templates = computed(
     () => this.router.parseUrl(this.url()).queryParams['view'] === 'templates',
   );

@@ -3,19 +3,22 @@
 >
 <header class="site-header" [class.site-header-event]="!!eventPath()">
   <div class="site-bar">
-    <a class="brand site-brand" routerLink="/e/regata-demo" aria-label="Регламент">
+    <a class="brand site-brand" routerLink="/" aria-label="Регламент">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-label">Регламент</span>
     </a>
     <nav class="site-nav" aria-label="Основная навигация">
       <a
         class="nav-item"
-        [attr.aria-current]="eventPath() ? 'page' : null"
-        [routerLink]="eventPath() || '/e/regata-demo'"
+        [attr.aria-current]="path() === '/' ? 'page' : null"
+        routerLink="/"
       >
-        Обзор
+        Мероприятия
       </a>
       @if (!eventPath() && session.authenticated()) {
+        @if (path() === '/') {
+          <a class="nav-item" routerLink="/admin">Управление</a>
+        }
         <a
           class="nav-item nav-item-compact"
           aria-label="Шаблоны"
@@ -82,6 +85,22 @@
               (focus)="$event.target.select()"
             />
           }
+          <a class="event-menu-option" routerLink="/" (click)="closeMenu()">
+            <svg
+              class="action-glyph"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.7"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <rect x="4" y="6" width="16" height="14" rx="2" />
+              <path d="M8 4v4m8-4v4M4 10h16m-12 4h8m-8 3h5" />
+            </svg>
+            <span>Все мероприятия</span>
+          </a>
           @if (session.authenticated()) {
             <a class="event-menu-option" routerLink="/admin" (click)="closeMenu()">
               <svg
@@ -94,10 +113,9 @@
                 stroke-linejoin="round"
                 aria-hidden="true"
               >
-                <rect x="4" y="6" width="16" height="14" rx="2" />
-                <path d="M8 4v4m8-4v4M4 10h16m-12 4h8m-8 3h5" />
+                <path d="m13.5 6.5 4 4M5 19l4.5-1 10-10a1.4 1.4 0 0 0 0-2l-2.5-2.5a1.4 1.4 0 0 0-2 0l-10 10L4 18Z" />
               </svg>
-              <span>Все мероприятия</span>
+              <span>Управление</span>
             </a>
             <a
               class="event-menu-option"
@@ -166,6 +184,8 @@
           }
         </div>
       </details>
+    } @else if (path() === '/' && !session.authenticated() && !session.checking()) {
+      <a class="nav-item" routerLink="/admin" aria-label="Войти как организатор">Войти</a>
     }
     <span class="sr-only" aria-live="polite">{{ copied() }}</span>
   </div>

@@ -1,0 +1,120 @@
+:host {
+  display: block;
+}
+.event-catalog {
+  display: grid;
+  min-width: 0;
+  max-width: 740px;
+  gap: 16px;
+  margin-inline: auto;
+  padding-top: clamp(5px, 2vw, 19px);
+}
+h1 {
+  font-size: clamp(27px, 4vw, 40px);
+  font-weight: 790;
+}
+.event-list {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--paper);
+  box-shadow: var(--shadow);
+  list-style: none;
+}
+.event-list li + li {
+  border-top: 1px solid var(--line);
+}
+.event-entry {
+  display: grid;
+  min-height: 72px;
+  min-width: 0;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  color: var(--ink);
+  text-decoration: none;
+}
+.event-list li:first-child .event-entry {
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+.event-list li:last-child .event-entry {
+  border-end-start-radius: var(--radius);
+  border-end-end-radius: var(--radius);
+}
+.event-entry:hover {
+  background: var(--blue-wash);
+}
+.event-entry:focus-visible {
+  outline-offset: -3px;
+}
+.event-thumb {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 13px;
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+.event-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.event-thumb svg {
+  width: 23px;
+  height: 23px;
+}
+.event-entry-copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+.event-entry-copy h2 {
+  font-size: clamp(16px, 2.6vw, 20px);
+  font-weight: 740;
+  overflow-wrap: anywhere;
+}
+.event-entry-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+}
+.event-entry-meta > * {
+  overflow-wrap: anywhere;
+}
+.event-entry-arrow {
+  width: 18px;
+  height: 18px;
+  color: var(--accent-strong);
+}
+.catalog-error {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+@media (max-width: 480px) {
+  .event-catalog {
+    gap: 11px;
+  }
+  .event-entry {
+    gap: 10px;
+    padding-inline: 10px;
+  }
+  .event-thumb {
+    width: 44px;
+    height: 44px;
+  }
+  .event-entry-arrow {
+    width: 16px;
+    height: 16px;
+  }
+}

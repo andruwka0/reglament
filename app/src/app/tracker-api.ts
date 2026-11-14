@@ -1,7 +1,7 @@
 import { HttpClient, HttpErrorResponse } from '@angular/common/http';
 import { Service, inject } from '@angular/core';
 import { Observable } from 'rxjs';
-import type { Catalog, Event, Status, Template } from './event.model';
+import type { Catalog, Event, EventSummary, Status, Template } from './event.model';
 import type { WorkflowAction, WorkflowView } from './workflow.model';
 
 export interface RoleSos {
@@ -14,6 +14,10 @@ export interface RoleSos {
 @Service()
 export class TrackerApi {
   private readonly http = inject(HttpClient);
+
+  events() {
+    return this.http.get<EventSummary[]>('/api/events');
+  }
 
   event(id: string) {
     return this.http.get<Event>(this.eventPath(id));

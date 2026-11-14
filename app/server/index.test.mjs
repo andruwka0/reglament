@@ -159,6 +159,47 @@ async function createEvent(app) {
 
 const tinyPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aRZkAAAAASUVORK5CYII=', 'base64')
 
+test('the public event list includes only event summaries and current cover versions', async (t) => {
+  const app = await fixture(t)
+  const empty = await app.request('/events')
+  assert.equal(empty.status, 200)
+  assert.deepEqual(empty.data, [])
+
+  const first = await createEvent(app)
+  const template = await app.request('/admin/templates', {
+    method: 'POST', admin: true, body: { eventId: first.id, title: 'Шаблон вне списка' },
+  })
+  assert.equal(template.status, 201)
+  const imported = await app.request('/admin/events/import', {
+    method: 'POST', admin: true, body: {
+      title: 'Встреча', location: 'Большой зал', description: 'Служебное описание',
+      info: [{ label: 'Организаторы', value: 'https://example.org/private' }],
+      roles: [{ title: 'Старший', assignees: ['@organizer'] }],
+    },
+  })
+  assert.equal(imported.status, 201)
+  const second = imported.data
+  const enabled = await app.request(`/events/${second.id}/workflow`, {
+    method: 'POST', admin: true, body: { action: 'enable' },
+  })
+  assert.equal(enabled.status, 200)
+  const cover = `/admin/events/${second.id}/cover`
+  const withCover = await app.request(cover, { method: 'PUT', admin: true, body: tinyPng, contentType: 'image/png' })
+  assert.equal(withCover.status, 200)
+
+  const summaries = [
+    { id: second.id, title: 'Встреча', date: '', location: 'Большой зал' },
+    { id: first.id, title: 'Регата', date: '2026-11-13', location: '' },
+  ]
+  const listed = await app.request('/events')
+  assert.equal(listed.status, 200)
+  assert.deepEqual(listed.data, [{ ...summaries[0], coverVersion: withCover.data.coverVersion }, summaries[1]])
+  assert.deepEqual((await app.request('/events', { admin: true })).data, listed.data)
+
+  assert.equal((await app.request(cover, { method: 'DELETE', admin: true })).status, 200)
+  assert.deepEqual((await app.request('/events')).data, summaries)
+})
+
 test('an organizer can sign in with a configured four-digit PIN', async (t) => {
   const pin = '0637'
   const app = await fixture(t, { password: pin })

@@ -360,6 +360,12 @@ function openStore(dataDir, demo) {
       return event
     }),
     assigneeForToken,
+    listEvents: () => db.prepare(`
+      SELECT events.id, json_extract(events.data, '$.title') AS title,
+        json_extract(events.data, '$.date') AS date, json_extract(events.data, '$.location') AS location,
+        covers.version AS coverVersion
+      FROM events LEFT JOIN covers ON covers.event_id = events.id ORDER BY events.rowid DESC
+    `).all().map(({ id, title, date, location, coverVersion }) => withCover({ id, title, date, location }, coverVersion)),
     catalog: () => ({
       events: db.prepare(`
         SELECT events.data, covers.version FROM events
@@ -740,6 +746,7 @@ export function createTrackerServer({
     }
     if (path.includes('\0') || path.includes('\\')) invalid('Некорректный адрес.')
     const { method } = request
+    if (path === '/api/events' && method === 'GET') return writeJson(response, 200, store.listEvents())
     if (path !== '/api' && !path.startsWith('/api/')) {
       if (method !== 'GET' && method !== 'HEAD') throw new RequestError(405, 'Этот метод недоступен.')
       return staticFile(response, method, path, directory)

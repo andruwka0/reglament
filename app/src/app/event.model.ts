@@ -41,18 +41,21 @@ export interface TimelineItem {
   description: string;
 }
 
-export interface Event {
+export interface EventSummary {
   id: string;
   title: string;
   date: string;
   location: string;
+  coverVersion?: string;
+}
+
+export interface Event extends EventSummary {
   description: string;
   info: EventInfo[];
   timeline: TimelineItem[];
   roles: Role[];
   tasks: Task[];
   revision: number;
-  coverVersion?: string;
   managedWorkflow?: boolean;
 }
 
@@ -67,7 +70,7 @@ export interface Catalog {
   templates: Template[];
 }
 
-export function eventCoverUrl(event: Event): string | null {
+export function eventCoverUrl(event: Pick<EventSummary, 'id' | 'coverVersion'>): string | null {
   if (!event.coverVersion) return null;
   return '/api/events/' + encodeURIComponent(event.id) + '/cover?v=' + encodeURIComponent(event.coverVersion);
 }
