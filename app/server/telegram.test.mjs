@@ -130,6 +130,8 @@ test('Telegram organizer password verifies by user ID and broadcasts only after 
   qa.message(10, 'direct', '/announce Запрещённый текст')
   qa.message(50, 'changed_name', '/announce Объявление из бота')
   const preview = await qa.until(() => qa.replies(50, 'Объявление из бота').at(-1))
+  assert.match(preview.text, /Подключено получателей: 1 из 4/)
+  assert.match(preview.text, /\/start.*назначенн/)
   const confirm = preview.reply_markup.inline_keyboard.flat().find((button) => button.text === 'Отправить')
   assert.equal(qa.replies(10, 'Объявление из бота').length, 0)
   assert.ok(confirm)
@@ -152,6 +154,37 @@ test('Telegram password attempts stay limited after restart', { timeout: 10_000 
   await qa.until(() => qa.replies(50, 'Слишком много попыток').length)
   assert.equal(qa.replies(50, 'Кабинет организатора подключён').length, 0)
   assert.ok(qa.sent.every((message) => !message.text.includes('fixture-admin-secret')))
+})
+
+test('organizer start includes commands and preserves event selection; participant help stays scoped', { timeout: 10_000 }, async (t) => {
+  const qa = await fixture(t)
+  const bot = qa.start()
+  const eventLink = await qa.until(() => bot.info(events[0]).botUrl)
+  qa.message(50, 'organizer', '/admin fixture-admin-secret')
+  await qa.until(() => qa.replies(50, 'Выберите мероприятие').length)
+  qa.message(50, 'organizer', '/start')
+  const menu = await qa.until(() => qa.replies(50, 'Команды организатора').at(-1))
+  assert.ok(menu.text.includes('Выберите мероприятие'))
+  assert.ok(menu.reply_markup.inline_keyboard.flat().some((button) => button.text === 'Регата'))
+  for (const command of ['/start', '/events', '/plan', '/announce текст', '/admin', '/logout', '/help']) {
+    assert.ok(menu.text.includes(command), command)
+  }
+  qa.message(50, 'organizer', `/start ${new URL(eventLink).searchParams.get('start')}`)
+  const selected = await qa.until(() => qa.replies(50, 'Команды организатора').find((message) => message.text.includes('«Регата»')))
+  assert.ok(selected.reply_markup.inline_keyboard.flat().some((button) => button.url?.endsWith('/meeting?view=plan')))
+  qa.message(50, 'organizer', '/start')
+  await qa.until(() => qa.replies(50, 'Команды организатора').filter((message) => message.text.includes('«Регата»')).length === 2)
+  qa.message(50, 'organizer', `/start login_${'a'.repeat(32)}`)
+  await qa.until(() => qa.replies(50, 'Ссылка устарела').length)
+  assert.equal(qa.replies(50, 'Команды организатора').length, 3)
+
+  qa.message(10, 'direct', '/start')
+  await qa.until(() => qa.replies(10, 'Выберите мероприятие').length)
+  qa.message(10, 'direct', '/help')
+  const participant = await qa.until(() => qa.replies(10, 'Команды участника').at(-1))
+  assert.ok(participant.text.includes('/plan'))
+  assert.doesNotMatch(participant.text, /\/(announce|admin|logout)\b/)
+  assert.equal(qa.replies(10, 'Команды организатора').length, 0)
 })
 
 test('outbox survives restart and retries Telegram rate limits', { timeout: 10_000 }, async (t) => {

@@ -9,6 +9,9 @@ const draftLifetime = 10 * 60 * 1000
 const maxAnnouncementLength = 3000
 const pageSize = 20
 const offsetResetMs = 6 * 24 * 60 * 60 * 1000
+const participantCommands = '/start — открыть бота\n/events — выбрать мероприятие\n/plan — открыть план\n/help — показать команды'
+const organizerCommands = `${participantCommands}\n/announce текст — отправить объявление\n/admin — войти как организатор\n/logout — выйти из кабинета`
+const organizerHelp = `Команды организатора\n${organizerCommands}`
 
 function taskRecipients(event) {
   const people = (item) => item.assignees ?? (item.assignee ? [item.assignee] : [])
@@ -185,12 +188,13 @@ export function createTelegram({
     return listEvents().filter((event) => hasEventAccess(event, user.username, isOrganizer))
   }
 
-  function showEvents(user, isOrganizer, page = 0) {
+  function showEvents(user, isOrganizer, page = 0, help = '') {
     const events = availableEvents(user, isOrganizer)
+    const prefix = help ? `${help}\n\n` : ''
     if (!events.length) {
-      push(user, user.username
+      push(user, prefix + (isOrganizer ? 'Мероприятий пока нет.' : user.username
         ? 'Пока у вас нет назначенных мероприятий. Уточните назначение у организатора.'
-        : 'Добавьте имя пользователя в настройках Telegram и снова отправьте /start.')
+        : 'Добавьте имя пользователя в настройках Telegram и снова отправьте /start.'))
       return
     }
     const lastPage = Math.ceil(events.length / pageSize) - 1
@@ -201,13 +205,14 @@ export function createTelegram({
     if (index > 0) paging.push({ text: 'Назад', callback_data: `events:${index - 1}` })
     if (index < lastPage) paging.push({ text: 'Далее', callback_data: `events:${index + 1}` })
     if (paging.length) buttons.push(paging)
-    push(user, 'Выберите мероприятие.', buttons)
+    push(user, `${prefix}Выберите мероприятие.`, buttons)
   }
 
-  function chooseEvent(user, event, isOrganizer) {
+  function chooseEvent(user, event, isOrganizer, help = '') {
     selectEvent.run(event.id, user.user_id)
     const buttons = [...eventButtons(event), [{ text: 'Сменить мероприятие', callback_data: 'events:0' }]]
-    push(user, `Выбрано мероприятие «${event.title}».${isOrganizer ? '\nРассылка участникам: /announce текст' : ''}`, buttons)
+    const guidance = help ? `\n\n${help}` : isOrganizer ? '\nРассылка участникам: /announce текст' : ''
+    push(user, `Выбрано мероприятие «${event.title}».${guidance}`, buttons)
   }
 
   function verifyOrganizer(user, password) {
@@ -241,8 +246,9 @@ export function createTelegram({
     }
     const nonce = randomBytes(12).toString('base64url')
     saveDraft.run(user.user_id, nonce, event.id, text, Date.now() + draftLifetime)
-    const { contacts } = recipientsFor(event)
-    push(user, `Рассылка · ${event.title}\nПодключено получателей: ${contacts.length}\n\n${text}`, [[
+    const { recipients, contacts } = recipientsFor(event)
+    const guidance = contacts.length < recipients ? '\nОстальным нужно отправить /start боту с Telegram-именем, назначенным в мероприятии.' : ''
+    push(user, `Рассылка · ${event.title}\nПодключено получателей: ${contacts.length} из ${recipients}${guidance}\n\n${text}`, [[
       { text: 'Отправить', callback_data: `send:${nonce}` }, { text: 'Отмена', callback_data: `cancel:${nonce}` },
     ]])
   }
@@ -301,13 +307,16 @@ export function createTelegram({
       else push(user, 'Рассылки доступны организатору. Для входа отправьте /admin.')
     } else if (action === 'events') {
       showEvents(user, isOrganizer)
+    } else if (action === 'help') {
+      push(user, isOrganizer ? organizerHelp : `Команды участника\n${participantCommands}`)
     } else if (action === 'start' || action === 'plan' || input) {
       const events = availableEvents(user, isOrganizer)
       const deepLink = action === 'start' ? command[2]?.match(/^event_([A-Za-z0-9_-]+)$/)?.[1] : null
       const selected = (deepLink && events.find((event) => eventKey(event.id) === deepLink)) ||
         currentEvent(user, isOrganizer) || (events.length === 1 && events[0])
-      if (selected) chooseEvent(user, selected, isOrganizer)
-      else showEvents(user, isOrganizer)
+      const help = action === 'start' && isOrganizer ? organizerHelp : ''
+      if (selected) chooseEvent(user, selected, isOrganizer, help)
+      else showEvents(user, isOrganizer, 0, help)
     }
     return false
   }
