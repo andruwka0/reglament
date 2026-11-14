@@ -10,7 +10,7 @@ const maxAnnouncementLength = 3000
 const pageSize = 20
 const offsetResetMs = 6 * 24 * 60 * 60 * 1000
 const participantCommands = '/start — открыть бота\n/events — выбрать мероприятие\n/plan — открыть план\n/help — показать команды'
-const organizerCommands = `${participantCommands}\n/announce текст — отправить объявление\n/admin — войти как организатор\n/logout — выйти из кабинета`
+const organizerCommands = `${participantCommands}\n/announce — начать рассылку\n/cancel — отменить рассылку\n/admin — войти как организатор\n/logout — выйти из кабинета`
 const organizerHelp = `Команды организатора\n${organizerCommands}`
 
 function eventParticipants(event) {
@@ -159,6 +159,14 @@ export function createTelegram({
     return { recipients: recipients.size, contacts: [...recipients].map((person) => linked.get(person)).filter(Boolean) }
   }
 
+  function botAnnouncementAudience(event) {
+    const { recipients, contacts } = recipientsFor(event)
+    const admins = organizers.all(Date.now(), telegramCoordinatorId ?? null)
+    const adminIds = new Set(admins.map((admin) => admin.user_id))
+    const participants = contacts.filter((person) => !adminIds.has(person.user_id))
+    return { recipients, connected: contacts.length, participants, admins, total: participants.length + admins.length }
+  }
+
   function broadcast(event, text) {
     const { recipients, contacts } = recipientsFor(event)
     for (const recipient of contacts) push(recipient, text, eventButtons(event), event)
@@ -173,7 +181,11 @@ export function createTelegram({
 
   function announce(event, text) {
     const announcement = normalizeAnnouncement(text)
-    return transaction(() => broadcast(event, `Объявление · ${event.title}\n\n${announcement}`))
+    return transaction(() => broadcast(event, announcementText(event, announcement)))
+  }
+
+  function announcementText(event, text) {
+    return `Объявление · ${event.title}\n\n${text}`
   }
 
   function currentEvent(user, isOrganizer) {
@@ -209,8 +221,14 @@ export function createTelegram({
   function chooseEvent(user, event, isOrganizer, help = '') {
     selectEvent.run(event.id, user.user_id)
     const buttons = [...eventButtons(event), [{ text: 'Сменить мероприятие', callback_data: 'events:0' }]]
-    const guidance = help ? `\n\n${help}` : isOrganizer ? '\nРассылка участникам: /announce текст' : ''
+    const guidance = help ? `\n\n${help}` : isOrganizer ? '\nНачать рассылку: /announce' : ''
     push(user, `Выбрано мероприятие «${event.title}».${guidance}`, buttons)
+    const pending = isOrganizer && readDraft.get(user.user_id, '', Date.now())
+    if (pending && !pending.event_id) askForAnnouncement(user, event)
+    else if (pending && pending.event_id !== event.id) {
+      removeDraft.run(user.user_id)
+      push(user, 'Мероприятие изменилось. Для новой рассылки отправьте /announce.')
+    }
   }
 
   function verifyOrganizer(user, password) {
@@ -233,20 +251,24 @@ export function createTelegram({
     showEvents(user, true)
   }
 
-  function previewAnnouncement(user, input) {
-    const event = currentEvent(user, true)
-    if (!event) return showEvents(user, true)
+  function askForAnnouncement(user, event) {
+    saveDraft.run(user.user_id, '', event?.id ?? '', '', Date.now() + draftLifetime)
+    if (!event) return showEvents(user, true, 0, 'Выберите мероприятие для рассылки.')
+    push(user, `Отправьте текст объявления для мероприятия «${event.title}» следующим сообщением. Для отмены отправьте /cancel.`)
+  }
+
+  function previewAnnouncement(user, event, input) {
     let text
     try {
       text = normalizeAnnouncement(input)
     } catch (error) {
-      return push(user, `${error.message}\nКоманда: /announce текст`)
+      return push(user, `${error.message}\nВведите текст снова или отправьте /cancel.`)
     }
     const nonce = randomBytes(12).toString('base64url')
     saveDraft.run(user.user_id, nonce, event.id, text, Date.now() + draftLifetime)
-    const { recipients, contacts } = recipientsFor(event)
-    const guidance = contacts.length < recipients ? '\nОстальным нужно отправить /start боту с Telegram-именем, назначенным в мероприятии.' : ''
-    push(user, `Рассылка · ${event.title}\nПодключено получателей: ${contacts.length} из ${recipients}${guidance}\n\n${text}`, [[
+    const { recipients, connected, admins, total } = botAnnouncementAudience(event)
+    const guidance = connected < recipients ? '\nОстальным участникам нужно отправить /start боту с Telegram-именем, назначенным в мероприятии.' : ''
+    push(user, `Рассылка · ${event.title}\nУчастники: ${connected} из ${recipients}\nАдмины: ${admins.length}\nВсего получателей: ${total}${guidance}\n\n${text}`, [[
       { text: 'Отправить', callback_data: `send:${nonce}` }, { text: 'Отмена', callback_data: `cancel:${nonce}` },
     ]])
   }
@@ -266,22 +288,28 @@ export function createTelegram({
     if (action === 'cancel') return push(user, 'Рассылка отменена.')
     const event = currentEvent(user, true)
     if (event?.id !== draft.event_id) return push(user, 'Выбрано другое мероприятие. Создайте новое объявление.')
-    const { queued } = broadcast(event, `Объявление · ${event.title}\n\n${draft.text}`)
-    push(user, queued ? `Объявление поставлено в очередь. Получателей: ${queued}.` : 'У мероприятия пока нет подключённых получателей.')
+    const { participants, admins, total } = botAnnouncementAudience(event)
+    const text = announcementText(event, draft.text)
+    const buttons = eventButtons(event)
+    for (const person of participants) push(person, text, buttons, event)
+    for (const admin of admins) push(admin, text, buttons, event, 'organizers')
+    push(user, total ? `Объявление поставлено в очередь. Получателей: ${total}.` : 'У мероприятия пока нет подключённых получателей.')
   }
 
   function handleMessage(user, message, isOrganizer) {
     if (message.forward_origin) return false
     const input = typeof message.text === 'string' ? message.text : ''
     const command = /^\/([a-z]+)(?:@[a-z0-9_]+)?(?:\s([\s\S]*))?$/i.exec(input)
+    const action = command?.[1].toLowerCase()
     const automatic = isTelegramCoordinator(user.user_id)
-    if (automatic && command?.[1].toLowerCase() === 'admin') {
+    if (action === 'admin') removeDraft.run(user.user_id)
+    if (automatic && action === 'admin') {
       savePrompt.run(0, user.user_id)
       push(user, organizerHelp)
       showEvents(user, true)
       return Boolean(command[2]?.length)
     }
-    if (command?.[1].toLowerCase() === 'admin' && command[2]?.length) {
+    if (action === 'admin' && command[2]?.length) {
       verifyOrganizer(user, command[2])
       return true
     }
@@ -290,7 +318,13 @@ export function createTelegram({
       return true
     }
     if (command && user.prompt_until) savePrompt.run(0, user.user_id)
-    const action = command?.[1].toLowerCase()
+    const pending = isOrganizer && !command && input && readDraft.get(user.user_id, '', Date.now())
+    if (pending) {
+      const event = currentEvent(user, true)
+      if (event?.id === pending.event_id) previewAnnouncement(user, event, input)
+      else askForAnnouncement(user, event)
+      return false
+    }
     const browserCode = action === 'start' ? command[2]?.match(/^login_([A-Za-z0-9_-]{32})$/)?.[1] : null
     if (browserCode) {
       if (!user.username) push(user, 'Укажите имя пользователя в Telegram и повторите вход с сайта.')
@@ -308,8 +342,11 @@ export function createTelegram({
       removeDraft.run(user.user_id)
       push(user, automatic ? 'Выбор мероприятия сброшен. Доступ координатора закреплён за вашим Telegram-аккаунтом.' : 'Кабинет организатора отключён.')
     } else if (action === 'announce') {
-      if (isOrganizer) previewAnnouncement(user, command[2])
+      if (isOrganizer) askForAnnouncement(user, currentEvent(user, true))
       else push(user, 'Рассылки доступны организатору. Для входа отправьте /admin.')
+    } else if (action === 'cancel' && isOrganizer) {
+      const removed = removeDraft.run(user.user_id).changes
+      push(user, removed ? 'Рассылка отменена.' : 'Нет активной рассылки.')
     } else if (action === 'events') {
       showEvents(user, isOrganizer)
     } else if (action === 'help') {
