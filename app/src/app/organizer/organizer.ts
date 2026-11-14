@@ -33,8 +33,12 @@ function editableAssignment<T extends { assignee: string; assignees?: string[] }
 }
 
 function assignmentList<T extends { assignee: string }>(item: T) {
-  const assignees = item.assignee.split(/[\s,;]+/).filter(Boolean);
+  const assignees = splitAssignments(item.assignee);
   return { ...item, assignees, assignee: assignees[0] ?? '' };
+}
+
+function splitAssignments(value: string): string[] {
+  return value.split(/[\s,;]+/).filter(Boolean);
 }
 
 function toEditor(event: Event): EditableEvent {
@@ -77,6 +81,7 @@ type Section = typeof sections[number]['id'];
   selector: 'app-organizer',
   imports: [FormField, RouterLink, NgTemplateOutlet, WorkflowAdmin],
   templateUrl: './organizer.html',
+  styleUrl: './organizer.css',
 })
 export class Organizer {
   private readonly api = inject(TrackerApi);
@@ -134,6 +139,10 @@ export class Organizer {
   protected readonly section = signal<Section>('intro');
   protected readonly addedRoleId = signal('');
   protected readonly sections = sections;
+  protected readonly roleDefaults = computed(() => new Map(this.draft().roles.map((role) => {
+    const first = splitAssignments(role.assignee)[0]?.replace(/^@/, '').toLowerCase();
+    return [role.id, first && /^[a-z0-9_]{1,32}$/.test(first) ? `@${first}` : ''];
+  })));
   protected readonly telegram = rxResource({
     params: () => this.authenticated() && this.section() === 'notifications'
       ? this.visibleEditor()?.id : undefined,

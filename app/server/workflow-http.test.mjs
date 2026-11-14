@@ -10,7 +10,7 @@ import { createTrackerServer } from './index.mjs'
 test('Telegram browser login is one-time and workflow mutations require verified senior permissions', async (t) => {
   const demo = JSON.parse(await readFile(new URL('./demo.json', import.meta.url), 'utf8'))
   const role = demo.roles[0]
-  const task = role.tasks[1]
+  const task = role.tasks[2]
   const seniorActor = { userId: '1001', username: role.assignee }
   const volunteerActor = { userId: '1002', username: role.tasks[2].assignee }
   const path = `/api/events/${demo.id}`
@@ -99,15 +99,20 @@ test('Telegram browser login is one-time and workflow mutations require verified
   assert.deepEqual((await request(workflow, { cookie: seniorLogin.cookie })).data.actor, { ...seniorActor, isAdmin: false })
   assert.deepEqual((await request(path, { cookie: seniorLogin.cookie })).data.roles[0].assignees, [seniorActor.username])
   assert.equal((await post(status, { status: 'done', assignee: seniorActor.username }, volunteerLogin.cookie)).status, 403)
+  const activePoint = (await request(workflow, { cookie: seniorLogin.cookie })).data.points.find((point) => point.roleId === role.id)
+  assert.equal(activePoint.seniorSource, 'default')
+  assert.equal(activePoint.isSenior, true)
+  const checked = await post(status, { status: 'done' }, seniorLogin.cookie)
+  assert.equal(checked.status, 200)
+  const updatedTask = checked.data.roles[0].tasks.find((item) => item.id === task.id)
+  assert.deepEqual(updatedTask.assignees, [volunteerActor.username])
+  assert.equal(updatedTask.status, 'done')
+  assert.ok((await request(workflow, { cookie: admin.cookie })).data.audit.some((entry) => entry.action === 'task-status'))
 
   const proposed = await apply('propose-senior', { roleId: role.id, username: seniorActor.username }, admin.cookie)
   const proposal = proposed.data.points.find((point) => point.roleId === role.id).proposal
   assert.equal((await apply('accept-senior', { roleId: role.id, proposalId: proposal.id }, volunteerLogin.cookie)).status, 403)
   assert.equal((await apply('accept-senior', { roleId: role.id, proposalId: proposal.id }, seniorLogin.cookie)).status, 200)
-  const checked = await post(status, { status: 'done' }, seniorLogin.cookie)
-  assert.equal(checked.status, 200)
-  assert.equal(checked.data.roles[0].tasks.find((item) => item.id === task.id).status, 'done')
-  assert.ok((await request(workflow, { cookie: admin.cookie })).data.audit.some((entry) => entry.action === 'task-status'))
 
   const sos = { roleId: role.id, type: 'sos', requestId: 'http-sos' }
   assert.equal((await apply('create-request', sos, volunteerLogin.cookie)).status, 403)

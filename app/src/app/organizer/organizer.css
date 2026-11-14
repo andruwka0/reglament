@@ -1,0 +1,57 @@
+.role-senior-link {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 7px;
+  color: var(--muted);
+  font-size: 13px;
+}
+.role-senior-link span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.role-senior-link strong {
+  color: var(--accent-strong);
+}
+.role-senior-link button {
+  color: var(--accent-strong);
+}
+.assignment-hint {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+.assignment-hint strong {
+  color: var(--accent-strong);
+}
+.task-editor-heading {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) 44px;
+  align-items: end;
+  gap: 8px;
+}
+.task-remove {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  color: #923449;
+}
+.task-remove:hover {
+  border-color: #efd5dc;
+  background: #fff4f6;
+}
+.task-remove:focus-visible {
+  outline-offset: -2px;
+}
+.task-remove svg {
+  width: 18px;
+  height: 18px;
+}

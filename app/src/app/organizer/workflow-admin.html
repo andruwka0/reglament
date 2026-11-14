@@ -32,7 +32,13 @@
       @for (point of view().points; track point.roleId) {
         <details class="edit-block card">
           <summary class="wrap">{{ point.title }} <span class="muted">{{ pointStatusLabels[point.status] }}</span></summary>
-          <p class="muted wrap">Старший: {{ point.senior || 'не назначен' }}</p>
+          @if (point.seniorSource === 'default' && point.senior) {
+            <p class="muted wrap">Ответственный по списку: {{ point.senior }}</p>
+          } @else if (point.senior) {
+            <p class="muted wrap">Старший: {{ point.senior }}</p>
+          } @else {
+            <p class="muted wrap">Ответственный за точку пока не назначен.</p>
+          }
           @if (point.status === 'preparation') {
             <div class="field">
               <label [attr.for]="'workflow-kind-' + point.roleId">Тип точки</label>
@@ -71,6 +77,10 @@
           @if (point.senior) {
             <button class="button danger" type="button" [disabled]="busy()"
               (click)="dispatch({ action: 'revoke-senior', roleId: point.roleId })">Снять назначение</button>
+          }
+          @if (point.seniorSource !== 'default') {
+            <button class="button secondary" type="button" [disabled]="busy()"
+              (click)="dispatch({ action: 'restore-default-senior', roleId: point.roleId })">Назначать первого по списку</button>
           }
         </details>
       } @empty {

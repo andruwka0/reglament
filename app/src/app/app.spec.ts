@@ -39,8 +39,10 @@ describe('App', () => {
   it('shows organizer links only while signed in and returns to the visitor menu after logout', async () => {
     const { fixture, app, menu, logOut } = await render(true);
     expect([...menu.querySelectorAll('a')].map((link) => link.getAttribute('href'))).toEqual([
+      '/admin',
       '/admin?view=templates',
     ]);
+    expect(menu.querySelector('a[href="/admin"]')?.textContent?.trim()).toBe('Все мероприятия');
     expect(app.querySelector('.site-nav a[href="/admin?view=templates"]')).toBeNull();
     const exit = [...menu.querySelectorAll('button')].find(
       (button) => button.textContent?.trim() === 'Выйти',

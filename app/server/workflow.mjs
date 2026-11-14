@@ -50,14 +50,17 @@ function members(role) {
 }
 
 function initialPoint(roleId) {
-  return { roleId, kind: 'general', status: 'preparation', version: 1, senior: null, seniorId: null, proposal: null }
+  return { roleId, kind: 'general', status: 'preparation', version: 1, senior: null, seniorId: null,
+    seniorSource: 'default', proposal: null }
 }
 
 const emptyState = () => ({ points: [], commands: [], requests: [], stages: [], audit: [], attempts: {} })
 const emptyView = (enabled, actor) => ({ enabled, actor, points: [], commands: [], requests: [], stages: [], audit: [] })
 const now = () => new Date().toISOString()
 const actorLabel = (actor) => actor.username ?? (actor.isAdmin ? 'Координатор' : 'Участник')
-const seniorOf = (point, actor) => Boolean(actor?.userId && point.seniorId === actor.userId)
+const seniorOf = (point, actor) => Boolean(actor?.userId && (point.seniorId
+  ? point.seniorId === actor.userId
+  : point.seniorSource === 'default' && point.senior && point.senior === actor.username))
 const canManage = (point, actor) => Boolean(actor?.isAdmin || seniorOf(point, actor))
 
 export function initialWorkflow(eventId) {
@@ -69,10 +72,12 @@ export function initialWorkflow(eventId) {
 
 function requireSenior(point, actor) {
   if (!seniorOf(point, actor)) fail(403, 'SENIOR_REQUIRED', 'Действие доступно действующему старшему точки.')
+  point.seniorId ??= actor.userId
 }
 
 function requireManager(point, actor) {
   if (!canManage(point, actor)) fail(403, 'POINT_ACCESS_REQUIRED', 'Действие доступно старшему этой точки и координатору.')
+  if (!actor.isAdmin) point.seniorId ??= actor.userId
 }
 
 function findRole(event, roleId) {
@@ -81,13 +86,27 @@ function findRole(event, roleId) {
   return role
 }
 
-function pointFor(state, roleId) {
-  let point = state.points.find((item) => item.roleId === roleId)
-  if (!point) {
-    point = initialPoint(roleId)
-    state.points.push(point)
+function resolvePoint(state, role, point) {
+  if (!point.seniorSource) {
+    if (point.seniorId) point.seniorSource = 'manual'
+    else if (state.audit.some((entry) => entry.roleId === role.id && entry.action === 'revoke-senior')) point.seniorSource = 'revoked'
+    else point.seniorSource = 'default'
+  }
+  if (point.seniorSource === 'default') {
+    const first = username(role.assignees ? role.assignees[0] : role.assignee)
+    if (point.senior !== first) point.seniorId = null
+    point.senior = first
   }
   return point
+}
+
+function pointFor(state, role) {
+  let point = state.points.find((item) => item.roleId === role.id)
+  if (!point) {
+    point = initialPoint(role.id)
+    state.points.push(point)
+  }
+  return resolvePoint(state, role, point)
 }
 
 export function createWorkflow({ database, getEvent }) {
@@ -118,15 +137,17 @@ export function createWorkflow({ database, getEvent }) {
     if (!state || !actor) return view
     const managed = new Set()
     for (const role of event.roles) {
-      const point = state.points.find((item) => item.roleId === role.id) ?? initialPoint(role.id)
+      const point = resolvePoint(state, role, state.points.find((item) => item.roleId === role.id) ?? initialPoint(role.id))
       const member = members(role).has(actor.username)
       const isSenior = seniorOf(point, actor)
       const manage = canManage(point, actor)
       if (manage) managed.add(role.id)
       if (!manage && !member) continue
       const { seniorId, proposal, ...visible } = point
+      const proposalVisible = proposal && (actor.isAdmin || (proposal.username === actor.username &&
+        (!proposal.userId || proposal.userId === actor.userId)))
       view.points.push({ ...visible, title: role.title, roleTitle: role.title, member, isSenior, canManage: manage,
-        proposal: actor.isAdmin || proposal?.username === actor.username ? proposal : null })
+        proposal: proposalVisible ? { id: proposal.id, username: proposal.username } : null })
     }
     view.commands = state.commands.map(({ targets, ...command }) => ({ ...command,
       targets: targets.filter((target) => managed.has(target.roleId)) })).filter((command) => command.targets.length)
@@ -151,8 +172,7 @@ export function createWorkflow({ database, getEvent }) {
     const roleIds = [...new Set(body.roleIds)]
     const command = { id: randomUUID(), type: body.type, message: text(body.message), createdAt: now(), targets: [] }
     for (const roleId of roleIds) {
-      findRole(event, roleId)
-      const point = pointFor(state, roleId)
+      const point = pointFor(state, findRole(event, roleId))
       if ((body.type === 'close_intake' && point.kind === 'general') ||
           (body.type === 'prepare_checkout' && point.kind !== 'cloakroom')) {
         fail(422, 'INVALID_TARGET', 'Команда недоступна для выбранного типа точки.')
@@ -210,8 +230,7 @@ export function createWorkflow({ database, getEvent }) {
   function handleRequest(event, state, actor, body) {
     const request = state.requests.find((item) => item.id === body.id)
     if (!request) fail(404, 'REQUEST_NOT_FOUND', 'Обращение не найдено.')
-    findRole(event, request.roleId)
-    const point = pointFor(state, request.roleId)
+    const point = pointFor(state, findRole(event, request.roleId))
     requireManager(point, actor)
     if (closedRequests.has(request.status)) fail(409, 'REQUEST_CLOSED', 'Обращение уже закрыто.')
     const { type, status } = request
@@ -261,26 +280,39 @@ export function createWorkflow({ database, getEvent }) {
     return true
   }
 
-  function changeSenior(point, role, actor, body) {
+  function changeSenior(state, point, role, actor, body) {
     if (body.action === 'propose-senior') {
       coordinator(actor)
       const candidate = username(body.username)
       if (!candidate || !members(role).has(candidate)) fail(400, 'INVALID_CANDIDATE', 'Выберите назначенного на точку участника.')
-      if (point.senior === candidate) fail(409, 'ALREADY_SENIOR', 'Участник уже старший этой точки.')
-      point.proposal = { id: randomUUID(), username: candidate }
+      if (point.seniorSource === 'manual' && point.senior === candidate) fail(409, 'ALREADY_SENIOR', 'Участник уже старший этой точки.')
+      point.proposal = { id: randomUUID(), username: candidate,
+        userId: point.senior === candidate ? point.seniorId : null }
       return
     }
     if (body.action === 'revoke-senior') {
       coordinator(actor)
+      point.seniorSource = 'revoked'
       point.senior = point.seniorId = null
+      return
+    }
+    if (body.action === 'restore-default-senior') {
+      coordinator(actor)
+      if (point.seniorSource !== 'default') {
+        point.seniorSource = 'default'
+        point.senior = point.seniorId = null
+        resolvePoint(state, role, point)
+      }
       return
     }
     if (!point.proposal || point.proposal.id !== body.proposalId) fail(409, 'STALE_PROPOSAL', 'Предложение уже изменилось.')
     if (body.action === 'revoke-proposal') coordinator(actor)
-    else if (!actor.userId || !actor.username || point.proposal.username !== actor.username || !members(role).has(actor.username)) {
+    else if (!actor.userId || !actor.username || point.proposal.username !== actor.username ||
+      (point.proposal.userId && point.proposal.userId !== actor.userId) || !members(role).has(actor.username)) {
       fail(403, 'PROPOSAL_ACCESS_REQUIRED', 'Ответить может только назначенный участник.')
     }
     if (body.action === 'accept-senior') {
+      point.seniorSource = 'manual'
       point.senior = actor.username
       point.seniorId = actor.userId
     }
@@ -314,7 +346,7 @@ export function createWorkflow({ database, getEvent }) {
       default: break
     }
     const role = findRole(event, body.roleId)
-    const point = pointFor(state, role.id)
+    const point = pointFor(state, role)
     switch (body.action) {
       case 'ack-command': case 'execute-command': return handleCommand(state, point, actor, body)
       case 'create-request': return createRequest(state, point, actor, body)
@@ -322,12 +354,13 @@ export function createWorkflow({ database, getEvent }) {
         if (!configurePoint(point, actor, body)) return
         record(state, actor, body.action, role.id, role.id, { kind: point.kind })
         return
-      case 'propose-senior': case 'accept-senior': case 'decline-senior': case 'revoke-proposal': case 'revoke-senior': {
+      case 'propose-senior': case 'accept-senior': case 'decline-senior': case 'revoke-proposal': case 'revoke-senior': case 'restore-default-senior': {
         const before = point.senior
         const proposed = point.proposal?.username
-        changeSenior(point, role, actor, body)
+        changeSenior(state, point, role, actor, body)
         point.version++
-        record(state, actor, body.action, role.id, role.id, { previousSenior: before, senior: point.senior, proposed: point.proposal?.username ?? proposed ?? null })
+        record(state, actor, body.action, role.id, role.id, { previousSenior: before, senior: point.senior,
+          seniorSource: point.seniorSource, proposed: point.proposal?.username ?? proposed ?? null })
         return
       }
       case 'set-point-status': {
@@ -354,7 +387,7 @@ export function createWorkflow({ database, getEvent }) {
     const event = getEvent(eventId)
     const role = event.roles.find((role) => role.tasks.some((task) => task.id === taskId))
     if (!role && !event.tasks.some((task) => task.id === taskId)) fail(404, 'TASK_NOT_FOUND', 'Задача не найдена.')
-    if (role && seniorOf(pointFor(state, role.id), actor)) {
+    if (role && seniorOf(pointFor(state, role), actor)) {
       text(body.comment)
       return
     }
@@ -406,6 +439,10 @@ export function createWorkflow({ database, getEvent }) {
         if (!state) return
         const role = event.roles.find((role) => role.tasks.some((task) => task.id === taskId))
         const actor = verified(identity)
+        if (role) {
+          const point = pointFor(state, role)
+          if (seniorOf(point, actor)) point.seniorId ??= actor.userId
+        }
         record(state, actor, 'task-status', taskId, role?.id ?? null, { status: body.status, comment: text(body.comment) })
         save.run(eventId, JSON.stringify(state))
       })

@@ -42,6 +42,7 @@ export interface WorkflowPoint {
   status: PointStatus;
   version: number;
   senior: string | null;
+  seniorSource: 'default' | 'manual' | 'revoked';
   proposal: { id: string; username: string } | null;
   member: boolean;
   isSenior: boolean;
@@ -110,7 +111,7 @@ export type WorkflowAction =
       roleId: string;
       proposalId: string;
     }
-  | { action: 'revoke-senior'; roleId: string }
+  | { action: 'revoke-senior' | 'restore-default-senior'; roleId: string }
   | {
       action: 'set-point-status';
       roleId: string;

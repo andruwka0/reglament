@@ -104,6 +104,8 @@ describe('Organizer', () => {
 
     const fields = page.querySelector<HTMLElement>('.edit-block')!;
     const complete = fields.querySelector<HTMLInputElement>('input[type=checkbox]')!;
+    expect(fields.querySelector('button[aria-label]')?.getAttribute('aria-label'))
+      .toBe('Удалить задачу: Встретить гостей');
     expect(complete.checked).toBe(false);
     expect(fields.querySelector('select')).toBeNull();
     const title = fields.querySelector<HTMLInputElement>('input')!;
@@ -128,6 +130,14 @@ describe('Organizer', () => {
     button('Сохранить изменения').click();
     await fixture.whenStable();
     expect(save.mock.calls[2][0].tasks[0].status).toBe('todo');
+
+    page.querySelector<HTMLButtonElement>('button[aria-label="Удалить задачу: Встретить команду"]')!.click();
+    await fixture.whenStable();
+    expect(page.textContent).toContain('Добавьте задачи для всего мероприятия.');
+    expect(save).toHaveBeenCalledTimes(3);
+    button('Сохранить изменения').click();
+    await fixture.whenStable();
+    expect(save.mock.calls[3][0].tasks).toEqual([]);
   });
 
   it.each([
@@ -239,7 +249,7 @@ describe('Organizer', () => {
     expect(page.querySelector('.editor h2')?.textContent).toContain('Турнир из JSON');
   });
 
-  it('loads existing contacts and saves multiple handles for a role', async () => {
+  it('updates the default point contact when multiple role handles are reordered', async () => {
     const queryParamMap = convertToParamMap({});
     const stored: TrackerEvent = {
       id: 'test', revision: 1, title: 'Турнир', date: '', location: '', description: '',
@@ -272,14 +282,17 @@ describe('Organizer', () => {
     button('Роли').click();
     await fixture.whenStable();
     const input = [...page.querySelectorAll('label')]
-      .find((label) => label.textContent?.trim() === 'Ответственные за роль')!.querySelector('input')!;
+      .find((label) => label.textContent?.trim() === 'Ответственные за роль')!.control as HTMLInputElement;
     expect(input.value).toBe('@existing');
-    input.value = '@existing, @second @third';
+    expect(page.querySelector('.role-senior-link strong')?.textContent).toBe('@existing');
+    input.value = '@second, @existing @third';
     input.dispatchEvent(new Event('input'));
     await fixture.whenStable();
+    expect(page.querySelector('.role-senior-link strong')?.textContent).toBe('@second');
+    expect(submitted).toBeUndefined();
     button('Сохранить изменения').click();
     await fixture.whenStable();
-    expect(submitted?.roles[0].assignees).toEqual(['@existing', '@second', '@third']);
+    expect(submitted?.roles[0].assignees).toEqual(['@second', '@existing', '@third']);
   });
 
   it('adds and saves a multiline text block without a contact heading', async () => {

@@ -13,7 +13,7 @@ const foreign = { username: '@foreign', userId: '104' }
 const event = {
   id: 'regata',
   roles: [
-    { id: 'registration', title: 'Регистрация', assignees: [anna.username, boris.username], tasks: [{ id: 'reg-task' }] },
+    { id: 'registration', title: 'Регистрация', assignees: [anna.username, boris.username], tasks: [{ id: 'reg-task', assignees: [boris.username] }] },
     { id: 'coatroom', title: 'Гардероб', assignees: [], tasks: [{ id: 'coat-task', assignees: [cyril.username] }] },
   ],
   tasks: [{ id: 'common-task' }],
@@ -21,10 +21,11 @@ const event = {
 }
 
 async function testWorkflow(t) {
+  const fixtureEvent = structuredClone(event)
   const directory = await mkdtemp(join(tmpdir(), 'reglament-workflow-'))
   const options = { database: join(directory, 'regatta.sqlite'), getEvent: (id) => {
     if (id !== event.id) throw Object.assign(new Error('Missing event'), { status: 404 })
-    return event
+    return fixtureEvent
   } }
   let workflow = createWorkflow(options)
   t.after(async () => {
@@ -42,7 +43,7 @@ async function testWorkflow(t) {
     const proposal = proposed.points.find((point) => point.roleId === roleId).proposal
     return apply(person, 'accept-senior', { roleId, proposalId: proposal.id })
   }
-  return { apply, status, view, appoint, get workflow() { return workflow }, restart() {
+  return { apply, status, view, appoint, event: fixtureEvent, get workflow() { return workflow }, restart() {
     workflow.close()
     workflow = createWorkflow(options)
   } }
@@ -61,8 +62,10 @@ test('workflows are opt-in and senior handover is consent-based and uses the acc
   app.apply(coordinator, 'enable')
   assert.deepEqual(app.view({ username: anna.username }), { enabled: true, actor: null, points: [], commands: [], requests: [], stages: [], audit: [] })
   assert.equal(app.view(foreign).points.length, 0)
-  assert.equal(app.view(anna).points[0].canManage, false)
-  rejects(() => app.workflow.authorizeTask(event.id, 'reg-task', anna), 403, 'SENIOR_REQUIRED')
+  assert.equal(app.view(anna).points[0].canManage, true)
+  assert.equal(app.view(boris).points[0].canManage, false)
+  assert.doesNotThrow(() => app.workflow.authorizeTask(event.id, 'reg-task', anna))
+  rejects(() => app.workflow.authorizeTask(event.id, 'reg-task', boris), 403, 'SENIOR_REQUIRED')
   rejects(() => app.apply(coordinator, 'propose-senior', { roleId, username: foreign.username }), 400, 'INVALID_CANDIDATE')
 
   app.appoint(anna, roleId)
@@ -87,6 +90,45 @@ test('workflows are opt-in and senior handover is consent-based and uses the acc
   assert.equal(app.view(coordinator).audit[0].action, 'task-status')
   app.apply(coordinator, 'revoke-senior', { roleId })
   assert.equal(app.view(boris).points[0].isSenior, false)
+})
+
+test('default senior follows the first role handle and manual revocation can be restored', async (t) => {
+  const app = await testWorkflow(t)
+  const roleId = 'registration'
+  const current = () => app.view(coordinator).points.find((point) => point.roleId === roleId)
+  const authorize = (actor) => app.workflow.authorizeTask(event.id, 'reg-task', actor)
+  app.apply(coordinator, 'enable')
+  assert.equal(current().senior, anna.username)
+  assert.equal(current().seniorSource, 'default')
+  assert.equal(app.view(coordinator).points[1].senior, null)
+  assert.doesNotThrow(() => authorize(anna))
+  app.workflow.recordTask(event.id, 'reg-task', anna, { status: 'done' })
+  app.restart()
+  assert.doesNotThrow(() => authorize({ ...anna, username: '@renamed' }))
+  rejects(() => authorize({ ...foreign, username: anna.username }), 403, 'SENIOR_REQUIRED')
+  const pinnedProposal = app.apply(coordinator, 'propose-senior', { roleId, username: anna.username }).points[0].proposal
+  rejects(() => app.apply({ ...foreign, username: anna.username }, 'accept-senior', { roleId, proposalId: pinnedProposal.id }),
+    403, 'PROPOSAL_ACCESS_REQUIRED')
+  app.event.roles[0].assignees.reverse()
+  assert.equal(current().senior, boris.username)
+  rejects(() => authorize(anna), 403, 'SENIOR_REQUIRED')
+  assert.doesNotThrow(() => authorize(boris))
+  app.status(boris, roleId, 'ready')
+  app.restart()
+  rejects(() => authorize({ ...foreign, username: boris.username }), 403, 'SENIOR_REQUIRED')
+
+  app.appoint(anna, roleId)
+  assert.equal(current().seniorSource, 'manual')
+  assert.equal(current().senior, anna.username)
+  app.apply(coordinator, 'revoke-senior', { roleId })
+  app.restart()
+  assert.equal(current().senior, null)
+  assert.equal(current().seniorSource, 'revoked')
+  rejects(() => authorize(boris), 403, 'SENIOR_REQUIRED')
+  app.apply(coordinator, 'restore-default-senior', { roleId })
+  assert.equal(current().senior, boris.username)
+  assert.equal(current().seniorSource, 'default')
+  assert.doesNotThrow(() => authorize(boris))
 })
 
 test('closing intake and preparing checkout require targeted coordinator commands; stages have explicit actual times', async (t) => {

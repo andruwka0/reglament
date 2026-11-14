@@ -113,12 +113,25 @@
             @for (roleValue of draft().roles; track roleValue.id) {
               @let role = editForm.roles[$index];
               @let roleId = roleValue.id;
+              @let defaultResponsible = roleDefaults().get(roleId);
               <details class="edit-block" [open]="$first || addedRoleId() === roleId">
                 <summary>{{ roleValue.title || 'Новая роль' }}</summary>
                 <div class="form-grid">
                   <label class="field">Название роли <input [formField]="role.title"></label>
-                  <label class="field">Ответственные за роль <input [formField]="role.assignee" placeholder="@username, @volunteer" autocomplete="off" spellcheck="false"></label>
+                  <div class="field">
+                    <label [attr.for]="'role-assignees-' + roleId">Ответственные за роль</label>
+                    <input [id]="'role-assignees-' + roleId" [formField]="role.assignee"
+                      [attr.aria-describedby]="'role-assignees-help-' + roleId"
+                      placeholder="@username, @volunteer" autocomplete="off" spellcheck="false">
+                    <p class="assignment-hint" [id]="'role-assignees-help-' + roleId">
+                      Укажите ники через запятую. Поставьте нужный ник первым и сохраните изменения.
+                    </p>
+                  </div>
                   <label class="field wide">Описание роли <textarea rows="2" [formField]="role.description"></textarea></label>
+                </div>
+                <div class="role-senior-link">
+                  <span>Ответственный за точку по умолчанию: <strong>{{ defaultResponsible || 'не назначен' }}</strong></span>
+                  <button class="button ghost" type="button" (click)="selectSection('workflow')">Управлять старшим точки</button>
                 </div>
                 <h3>Задачи роли</h3>
                 @for (task of roleValue.tasks; track task.id) {
@@ -323,8 +336,18 @@
 </dialog>
 
 <ng-template #taskFields let-task let-roleId="roleId" let-taskId="taskId">
-  <div class="edit-block form-grid">
-    <label class="field wide">Задача <input [formField]="task.title"></label>
+  <div class="edit-block form-grid task-editor">
+    <div class="task-editor-heading">
+      <label class="field">Задача <input [formField]="task.title"></label>
+      <button class="task-remove" type="button" (click)="removeTask(taskId, roleId)"
+        [attr.aria-label]="task.title().value() ? 'Удалить задачу: ' + task.title().value() : 'Удалить задачу'"
+        title="Удалить задачу">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.65"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M4 7h16m-11 0V4h6v3m3.5 0-.8 13H6.3L5.5 7M10 11v5m4-5v5" />
+        </svg>
+      </button>
+    </div>
     <label class="field wide">Подробности <textarea rows="2" [formField]="task.description"></textarea></label>
     <label class="field">Начало <input type="time" [formField]="task.start"></label>
     <label class="field">Конец <input type="time" [formField]="task.end"></label>
@@ -337,6 +360,5 @@
         (change)="task.status().value.set(completed.checked ? 'done' : 'todo')">
       Выполнено
     </label> }
-    <button class="button danger" type="button" (click)="removeTask(taskId, roleId)">Удалить задачу</button>
   </div>
 </ng-template>

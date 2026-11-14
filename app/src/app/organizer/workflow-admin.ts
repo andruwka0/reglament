@@ -27,6 +27,7 @@ const auditLabels: Record<string, string> = {
   'decline-senior': 'Участник отказался от роли старшего',
   'revoke-proposal': 'Отозвано предложение',
   'revoke-senior': 'Снято назначение старшего',
+  'restore-default-senior': 'Восстановлено автоматическое назначение',
   'set-point-status': 'Обновлён статус точки',
   'create-command': 'Выдана команда',
   'ack-command': 'Принята команда',

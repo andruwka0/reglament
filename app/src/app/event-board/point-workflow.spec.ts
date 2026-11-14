@@ -10,6 +10,7 @@ const point: WorkflowView['points'][number] = {
   status: 'intake',
   version: 8,
   senior: '@senior',
+  seniorSource: 'manual',
   proposal: null,
   member: true,
   isSenior: false,
