@@ -249,7 +249,7 @@ export class EventBoard {
             ? ('past' as const)
             : actual.get(item.id)?.status === 'started'
               ? ('current' as const)
-              : ('upcoming' as const),
+              : item.state,
       })),
     };
   });
@@ -666,6 +666,7 @@ export class EventBoard {
   }
 
   protected formatPlanTime(start: string, end: string, point: boolean): string {
+    if (start && start === end) return start;
     if (start && !end) return point ? start : 'С ' + start;
     return this.formatTime(start, end);
   }

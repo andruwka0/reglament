@@ -157,6 +157,49 @@ describe('EventBoard', () => {
     );
   });
 
+  it('highlights the planned stage by Moscow time while actual times are unavailable', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-11-14T12:26:00Z'));
+    try {
+      const { board, fixture } = render(
+        null,
+        {
+          ...event,
+          date: '2026-11-14',
+          managedWorkflow: true,
+          timeline: [
+            { id: 'briefing', title: 'Брифинг', description: '', start: '14:00', end: '15:30' },
+            {
+              id: 'ready',
+              title: 'Готовность постов',
+              description: '',
+              start: '15:30',
+              end: '15:30',
+            },
+            { id: 'check-in', title: 'Регистрация', description: '', start: '15:30', end: '16:30' },
+          ],
+        },
+        false,
+        'plan',
+      );
+      expect(board.querySelector('.plan-clock')?.textContent).toContain('15:26 мск');
+      expect(board.querySelector('.plan-item[aria-current="step"]')?.textContent).toContain(
+        'Брифинг',
+      );
+      expect(board.querySelectorAll('.plan-time')[1]?.textContent?.trim()).toBe('15:30');
+
+      vi.advanceTimersByTime(4 * 60_000);
+      fixture.detectChanges();
+      expect(board.querySelector('.plan-item[aria-current="step"]')?.textContent).toContain(
+        'Регистрация',
+      );
+      expect(board.querySelector('.plan-item .plan-past-check')).not.toBeNull();
+      fixture.destroy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('restores a previously selected participant for the same event', () => {
     window.localStorage.setItem('reglament-person:regatta', '@volunteer');
     const { board, change } = render();

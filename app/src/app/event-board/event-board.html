@@ -715,17 +715,12 @@
 
   <ng-template #planSummary let-item>
     <span class="plan-title">{{ item.title }}</span>
-    @if (actualStages().get(item.id); as stage) {
-      @if (stage.status === 'started') {
-        <span class="plan-state">Началось в {{ stage.startedAt | date: 'HH:mm' : '+0300' }}</span>
-      } @else if (stage.status === 'finished') {
-        <span class="plan-state"
-          >Завершилось в {{ stage.finishedAt | date: 'HH:mm' : '+0300' }}</span
-        >
-      } @else {
-        <span class="plan-state">По плану</span>
-      }
-    } @else if (!managedWorkflow() && item.state !== 'untimed') {
+    @let stage = actualStages().get(item.id);
+    @if (stage?.status === 'started') {
+      <span class="plan-state">Началось в {{ stage.startedAt | date: 'HH:mm' : '+0300' }}</span>
+    } @else if (stage?.status === 'finished') {
+      <span class="plan-state">Завершилось в {{ stage.finishedAt | date: 'HH:mm' : '+0300' }}</span>
+    } @else if (item.state !== 'untimed') {
       <span class="plan-state">{{ planLabel(item.state) }}</span>
     }
   </ng-template>
