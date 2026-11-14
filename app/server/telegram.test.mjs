@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import { test } from 'node:test'
+import { createTelegramLink } from './telegram-link.mjs'
 import { createTelegram } from './telegram.mjs'
 
 const assigned = (...assignees) => ({ assignees })
@@ -13,8 +14,9 @@ const events = [
   { id: 'foreign', title: 'Закрытая встреча', roles: [{ ...assigned('@unused'), tasks: [assigned('@elsewhere')] }], tasks: [] },
 ]
 
-async function fixture(t, { catalog = events, telegramCoordinatorId } = {}) {
+async function fixture(t, { catalog = events, telegramCoordinatorId, confirmBrowser } = {}) {
   const dataDir = await mkdtemp(join(tmpdir(), 'reglament-telegram-'))
+  const database = join(dataDir, 'regatta.sqlite')
   const updates = []
   const sent = []
   const deleted = []
@@ -55,7 +57,7 @@ async function fixture(t, { catalog = events, telegramCoordinatorId } = {}) {
     assert.fail(`Timed out. Messages: ${JSON.stringify(sent)}`)
   }
   function start() {
-    bot = createTelegram({ token: 'mock-token', dataDir, publicOrigin: 'https://fixture.invalid', listEvents: () => catalog, getEvent: (id) => catalog.find((event) => event.id === id), verifyAdminPassword: (value) => value === 'fixture-admin-secret', fetchImpl, idleMs: 5, telegramCoordinatorId })
+    bot = createTelegram({ token: 'mock-token', database, publicOrigin: 'https://fixture.invalid', listEvents: () => catalog, getEvent: (id) => catalog.find((event) => event.id === id), verifyAdminPassword: (value) => value === 'fixture-admin-secret', fetchImpl, idleMs: 5, telegramCoordinatorId, confirmBrowser })
     bot.start()
     return bot
   }
@@ -72,8 +74,32 @@ async function fixture(t, { catalog = events, telegramCoordinatorId } = {}) {
     updates.push({ update_id: updateId, callback_query: { id: String(updateId++), from: { id, username }, message: { chat: { id, type: 'private' } }, data } })
   }
   const replies = (id, fragment) => sent.filter((entry) => Number(entry.chat_id) === id && entry.text.includes(fragment))
-  return { start, message, callback, replies, until, sent, deleted, profiles, throttle: (needle) => { throttle = needle }, throttled: () => throttled }
+  return { start, message, callback, replies, until, sent, deleted, profiles, database, throttle: (needle) => { throttle = needle }, throttled: () => throttled }
 }
+
+test('a real Telegram browser link on the bot database does not stall the next command', { timeout: 10_000 }, async (t) => {
+  let link
+  const qa = await fixture(t, { confirmBrowser: (...args) => link.confirm(...args) })
+  const bot = qa.start()
+  await qa.until(() => bot.info(events[0]).botUrl)
+  link = createTelegramLink(bot, { database: qa.database })
+  t.after(() => link.close())
+  const pending = link.start()
+  const payload = new URL(pending.url).searchParams.get('start')
+  assert.equal(link.actor(pending.browser), null)
+
+  qa.message(10, 'Direct', `/start ${payload}`)
+  qa.message(10, 'Direct', '/help')
+  await qa.until(() => qa.replies(10, 'Команды участника').length)
+  assert.equal(qa.replies(10, 'Вход подтверждён').length, 1)
+  assert.deepEqual(link.actor(pending.browser), { userId: '10', username: '@direct' })
+
+  qa.message(20, 'Other', `/start ${payload}`)
+  qa.message(20, 'Other', '/help')
+  await qa.until(() => qa.replies(20, 'Команды участника').length)
+  assert.equal(qa.replies(20, 'Ссылка устарела').length, 1)
+  assert.deepEqual(link.actor(pending.browser), { userId: '10', username: '@direct' })
+})
 
 test('private participants switch assigned events and receive scoped plan and announcements', { timeout: 10_000 }, async (t) => {
   const qa = await fixture(t)

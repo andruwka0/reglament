@@ -26,10 +26,10 @@ export function createTelegramLink(telegram, { database }) {
     INSERT INTO telegram_browser_sessions (browser_hash, code_hash, expires_at)
     SELECT ?, ?, ? WHERE (SELECT COUNT(*) FROM telegram_browser_sessions WHERE code_hash IS NOT NULL) < ?
   `)
-  const confirm = db.prepare(`
+  const confirmSql = `
     UPDATE telegram_browser_sessions SET code_hash = NULL, user_id = ?, username = ?, expires_at = ?
     WHERE code_hash = ? AND expires_at > ?
-  `)
+  `
   const remove = db.prepare('DELETE FROM telegram_browser_sessions WHERE browser_hash = ?')
 
   const get = (browser, now) => typeof browser === 'string' && browserPattern.test(browser)
@@ -55,10 +55,12 @@ export function createTelegramLink(telegram, { database }) {
     actor(browser) {
       return linkedActor(get(browser, Date.now()))
     },
-    confirm(code, actor) {
+    confirm(code, actor, connection = db) {
       if (typeof code !== 'string' || !codePattern.test(code) || !actor?.userId || !actor.username) return false
       const now = Date.now()
-      return Boolean(confirm.run(String(actor.userId), actor.username, now + rememberForSeconds * 1000, digest(code), now).changes)
+      return Boolean(connection.prepare(confirmSql).run(
+        String(actor.userId), actor.username, now + rememberForSeconds * 1000, digest(code), now,
+      ).changes)
     },
     logout(browser) {
       if (typeof browser === 'string' && browserPattern.test(browser)) remove.run(digest(browser))

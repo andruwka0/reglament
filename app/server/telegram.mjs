@@ -384,7 +384,8 @@ export function createTelegram({
     const browserCode = action === 'start' ? command[2]?.match(/^login_([A-Za-z0-9_-]{32})$/)?.[1] : null
     if (browserCode) {
       if (!user.username) push(user, 'Укажите имя пользователя в Telegram и повторите вход с сайта.')
-      else if (confirmBrowser(browserCode, { userId: user.user_id, username: user.username })) {
+      // Confirm the session in the same SQLite transaction as the Telegram update.
+      else if (confirmBrowser(browserCode, { userId: user.user_id, username: user.username }, db)) {
         push(user, 'Вход подтверждён. Вернитесь на страницу «Регламента» в браузере.')
       } else push(user, 'Ссылка устарела. Начните вход заново на сайте.')
       return false

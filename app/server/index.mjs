@@ -537,7 +537,7 @@ export function createTrackerServer({
   const telegram = telegramToken ? telegramFactory({
     token: telegramToken, dataDir: resolve(dataDir), publicOrigin, verifyAdminPassword,
     listEvents: () => store.catalog().events, getEvent: store.getEvent,
-    confirmBrowser: (code, actor) => telegramLink.confirm(code, actor), telegramCoordinatorId,
+    confirmBrowser: (code, actor, connection) => telegramLink.confirm(code, actor, connection), telegramCoordinatorId,
   }) : null
   telegramLink = createTelegramLink(telegram, { database: join(resolve(dataDir), 'regatta.sqlite') })
   const workflow = createWorkflow({ database: join(resolve(dataDir), 'regatta.sqlite'), getEvent: store.getEvent })
