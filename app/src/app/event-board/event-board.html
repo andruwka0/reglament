@@ -194,6 +194,31 @@
       </svg>
       <span>Важное</span>
     </button>
+    @if (managedWorkflow() && !workflow()?.actor) {
+      @if (telegramLoginUrl(); as url) {
+        <a
+          class="event-dock-tab event-dock-login"
+          [href]="url"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Открыть Telegram"
+        >
+          <ng-container *ngTemplateOutlet="telegramLoginIcon" />
+          <span>{{ mobile() ? 'Telegram' : 'Открыть Telegram' }}</span>
+        </a>
+      } @else {
+        <button
+          class="event-dock-tab event-dock-login"
+          type="button"
+          [disabled]="telegramLoginBusy()"
+          aria-label="Войти через Telegram"
+          (click)="startTelegramLogin()"
+        >
+          <ng-container *ngTemplateOutlet="telegramLoginIcon" />
+          <span>{{ mobile() ? 'Войти' : 'Войти через Telegram' }}</span>
+        </button>
+      }
+    }
   </nav>
 
   @if (organizerSession.authenticated() && alerts().length) {
@@ -230,8 +255,8 @@
   }
 
   <div class="event-grid">
-    @if (managedWorkflow()) {
-      <section class="panel workflow-access" aria-label="Вход в рабочий режим">
+    @if (managedWorkflow() && (workflow()?.actor || telegramLoginUrl() || workflowError())) {
+      <section class="workflow-access" aria-label="Вход в рабочий режим">
         @if (workflow()?.actor; as actor) {
           <span>{{ actor.isAdmin ? 'Координатор' : actor.username }}</span>
           @if (actor.userId) {
@@ -239,17 +264,10 @@
               Выйти из Telegram
             </button>
           }
-        } @else if (telegramLoginUrl(); as url) {
+        } @else if (telegramLoginUrl()) {
           <span>Нажмите «Старт» у бота и вернитесь сюда.</span>
-          <a class="button primary" [href]="url" target="_blank" rel="noopener noreferrer"
-            >Открыть Telegram</a
-          >
           <button type="button" class="button ghost" (click)="endTelegramLogin()">
             Начать заново
-          </button>
-        } @else {
-          <button type="button" class="button primary" (click)="startTelegramLogin()">
-            Войти через Telegram
           </button>
         }
         @if (workflowError()) {
@@ -849,6 +867,20 @@
       </svg>
     }
   </span>
+</ng-template>
+
+<ng-template #telegramLoginIcon>
+  <svg
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.75"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m21 4-5 16-5-5-4 2 1-5-5-2 18-6Zm-13 8 8-4" />
+  </svg>
 </ng-template>
 
 <ng-template #sosControl let-roleId>

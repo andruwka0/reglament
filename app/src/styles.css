@@ -498,7 +498,7 @@ button.task-check:hover:not(:disabled) { background: var(--blue-wash); }
 .task-main :where(h3, h4) { font-size: inherit; font-weight: 700; line-height: 1.35; }
 .task-side { min-width: 0; max-width: 92px; justify-self: end; }
 .task-view-hint { color: var(--muted); font-size: 13px; }
-.workflow-access { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; padding: 10px 13px; }
+.workflow-access { grid-column: 1 / -1; display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; color: var(--muted); font-size: 13px; }
 .workflow-access > .notice { flex-basis: 100%; }
 .task-time, .timeline-time { color: var(--accent-strong); font-variant-numeric: tabular-nums; font-weight: 740; }
 .task-time { display: block; color: var(--muted); font-size: 11.5px; line-height: 1.35; text-align: end; overflow-wrap: anywhere; }
@@ -853,6 +853,8 @@ app-organizer > .notice { margin-top: 16px; }
   line-height: 1.2;
 }
 .event-dock-tab svg { width: 20px; height: 20px; }
+.event-dock .event-dock-login { background: var(--accent-soft); color: var(--accent-strong); text-decoration: none; }
+.event-dock .event-dock-login:hover { background: var(--tab-active); }
 .event-dock-tab:hover { background: var(--blue-wash); color: var(--accent-strong); }
 .event-dock-tab.active, .event-dock-tab[aria-pressed='true'], .event-dock-tab[aria-current='page'] {
   background: var(--tab-active);
@@ -1040,6 +1042,7 @@ summary.plan-summary::after {
     padding: 5px 4px;
     font-size: 11px;
   }
+  .event-dock:has(.event-dock-login) { grid-template-columns: repeat(5, minmax(0, 1fr)); }
   .event-plan, .event-team, .event-important { gap: 11px; }
   .plan-item { --plan-rail: 50px; --plan-gap: 7px; }
   .plan-card { padding: 8px 10px; }

@@ -109,6 +109,7 @@ export class EventBoard {
   protected readonly workflowError = signal('');
   protected readonly lastAppliedAction = signal<WorkflowAction | null>(null);
   protected readonly telegramLoginUrl = signal<string | null>(null);
+  protected readonly telegramLoginBusy = signal(false);
   private readonly workflowRefresh = new Subject<void>();
   private readonly eventId = computed(() => this.event()?.id);
   protected readonly coverUrl = computed(() => {
@@ -404,11 +405,16 @@ export class EventBoard {
   }
 
   protected async startTelegramLogin() {
+    if (this.telegramLoginBusy()) return;
+    this.telegramLoginBusy.set(true);
     this.workflowError.set('');
     try {
       this.telegramLoginUrl.set((await firstValueFrom(this.api.startTelegramLogin())).url);
+      this.workflowRefresh.next();
     } catch (error) {
       this.workflowError.set(errorMessage(error));
+    } finally {
+      this.telegramLoginBusy.set(false);
     }
   }
 
