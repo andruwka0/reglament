@@ -141,6 +141,9 @@ export class EventBoard {
   protected readonly activePost = computed(
     () => this.posts().find((post) => post.id === this.selectedPostId()) ?? this.posts()[0],
   );
+  protected readonly roleResponsibles = computed(
+    () => new Map(this.event()?.roles.map((role) => [role.id, this.people(role)])),
+  );
   protected readonly ownRoleIds = computed(
     () =>
       new Set(

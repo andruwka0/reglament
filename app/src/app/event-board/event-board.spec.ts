@@ -214,9 +214,10 @@ describe('EventBoard', () => {
 
   it('shows multiple role contacts separately from task contacts and keeps legacy contacts', () => {
     const { board } = render();
-    const role = board.querySelector('.role-head .responsibles')!;
-    expect(role.querySelectorAll('.responsibles-list > a')).toHaveLength(3);
-    expect(role.querySelector('summary')?.textContent).toContain('Ещё 1');
+    const role = board.querySelector('.role-responsibles')!;
+    expect(role.nextElementSibling).toBe(board.querySelector('.role-card'));
+    expect(role.querySelectorAll('.responsibles-list a')).toHaveLength(3);
+    expect(board.querySelector('.role-head .responsibles')).toBeNull();
     expect(role.textContent).not.toContain('@legacy_owner');
     expect(board.textContent).not.toContain('@stale_owner');
     const taskContacts = board.querySelectorAll('.task-responsibles');

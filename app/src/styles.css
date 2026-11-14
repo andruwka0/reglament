@@ -412,12 +412,16 @@ textarea { min-height: 78px; resize: vertical; }
 a.assignee:hover { background: var(--accent-soft); text-decoration: underline; }
 .assignee svg { width: 13px; height: 13px; flex: 0 0 auto; }
 .responsibles { display: grid; min-width: 0; gap: 4px; }
-.role-meta > .responsibles {
-  padding: 7px 9px;
-  border: 1px solid var(--line);
-  border-radius: 12px;
-  background: var(--tinted-paper);
+.role-responsibles {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 9px;
+  padding-inline: 4px;
 }
+.role-responsibles > .responsibles-list { flex: 0 1 auto; }
+.role-responsibles li { min-width: 0; max-width: 100%; }
 .responsibles-label { color: var(--muted); font-size: 12px; font-weight: 700; }
 .responsibles-list {
   display: flex;
@@ -756,14 +760,27 @@ app-organizer > .notice { margin-top: 16px; }
   gap: 8px;
 }
 .board-filters label { display: grid; min-width: 0; gap: 3px; }
-.board-filters label > span { padding-inline: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.board-filters label > span:first-child { padding-inline: 6px; color: var(--muted); font-size: 12px; font-weight: 650; }
+.board-select { position: relative; display: block; min-width: 0; }
 .board-filters select {
+  display: block;
   width: 165px;
   min-width: 0;
-  padding-inline: 10px 22px;
+  padding-inline: 12px 39px;
   border-radius: var(--pill);
+  appearance: none;
   font-size: 13px;
   text-overflow: ellipsis;
+}
+.board-select-chevron {
+  position: absolute;
+  inset-block-start: 50%;
+  inset-inline-end: 15px;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
 }
 .event-intro { margin-bottom: 10px; color: var(--muted); white-space: pre-line; overflow-wrap: anywhere; }
 

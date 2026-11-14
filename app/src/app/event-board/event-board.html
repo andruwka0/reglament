@@ -378,6 +378,9 @@
         }
 
         @if (activePost(); as post) {
+          <ng-container
+            *ngTemplateOutlet="roleContacts; context: { $implicit: post.id, showHint: true }"
+          />
           <section class="post-tasks" aria-labelledby="post-tasks-title">
             <header class="post-tasks-heading">
               <h2 id="post-tasks-title">Задачи поста</h2>
@@ -436,14 +439,17 @@
             @if (!personFilter() && tab() === 'roles' && board.roles.length > 1) {
               <label class="role-filter">
                 <span>Показать роли</span>
-                <select #roleSelect (change)="roleFilter.set(roleSelect.value)">
-                  <option value="" [selected]="!roleFilter()">Все роли</option>
-                  @for (role of board.roles; track role.id) {
-                    <option [value]="role.id" [selected]="role.id === roleFilter()">
-                      {{ role.title }}
-                    </option>
-                  }
-                </select>
+                <span class="board-select">
+                  <select #roleSelect (change)="roleFilter.set(roleSelect.value)">
+                    <option value="" [selected]="!roleFilter()">Все роли</option>
+                    @for (role of board.roles; track role.id) {
+                      <option [value]="role.id" [selected]="role.id === roleFilter()">
+                        {{ role.title }}
+                      </option>
+                    }
+                  </select>
+                  <ng-container *ngTemplateOutlet="boardSelectChevron" />
+                </span>
               </label>
             }
           </div>
@@ -458,6 +464,9 @@
         }
 
         @for (role of groups(); track role.id) {
+          <ng-container
+            *ngTemplateOutlet="roleContacts; context: { $implicit: role.id, showHint: $first }"
+          />
           <section class="role-card">
             <div class="role-head">
               <span class="role-icon" aria-hidden="true">{{
@@ -470,13 +479,6 @@
                     <p>{{ role.description }}</p>
                   }
                 </div>
-                @if (people(role).length) {
-                  <div class="responsibles">
-                    <ng-container
-                      *ngTemplateOutlet="responsibles; context: { $implicit: people(role) }"
-                    />
-                  </div>
-                }
               </div>
               <ng-container *ngTemplateOutlet="sosControl; context: { $implicit: role.id }" />
             </div>
@@ -682,15 +684,33 @@
   <ng-template #personFilterControl>
     <label class="person-filter">
       <span>Telegram</span>
-      <select #personSelect (change)="choosePerson(personSelect.value)">
-        <option value="" [selected]="!personFilter()">Все участники</option>
-        @for (person of participants(); track person) {
-          <option [value]="person" [selected]="person === personFilter()">
-            {{ person }}
-          </option>
-        }
-      </select>
+      <span class="board-select">
+        <select #personSelect (change)="choosePerson(personSelect.value)">
+          <option value="" [selected]="!personFilter()">Все участники</option>
+          @for (person of participants(); track person) {
+            <option [value]="person" [selected]="person === personFilter()">
+              {{ person }}
+            </option>
+          }
+        </select>
+        <ng-container *ngTemplateOutlet="boardSelectChevron" />
+      </span>
     </label>
+  </ng-template>
+
+  <ng-template #boardSelectChevron>
+    <svg
+      class="board-select-chevron"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m4 6 4 4 4-4" />
+    </svg>
   </ng-template>
 
   <ng-template #planSummary let-item>
@@ -884,6 +904,28 @@
         }
       </div>
     </details>
+  }
+</ng-template>
+
+<ng-template #roleContacts let-roleId let-showHint="showHint">
+  @if (roleResponsibles().get(roleId); as handles) {
+    @if (handles.length) {
+      <div class="role-responsibles">
+        <span class="responsibles-label">Ответственные</span>
+        <ul class="responsibles-list" aria-label="Ответственные за роль">
+          @for (handle of handles; track handle) {
+            <li>
+              <ng-container *ngTemplateOutlet="telegramLink; context: { $implicit: handle }" />
+            </li>
+          }
+        </ul>
+      </div>
+    } @else if (showHint && managedWorkflow() && !workflow()?.actor) {
+      <div class="role-responsibles">
+        <span class="responsibles-label">Ответственные</span>
+        <p class="task-view-hint">Войдите через Telegram, чтобы увидеть список.</p>
+      </div>
+    }
   }
 </ng-template>
 
