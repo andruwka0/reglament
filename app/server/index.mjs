@@ -527,7 +527,7 @@ async function staticFile(response, method, path, directory) {
 
 export function createTrackerServer({
   password, dataDir = 'data', staticDir = 'dist/regatta-tracker/browser', demo, secureCookie = false,
-  telegramToken, publicOrigin = 'https://reglament.andruwka.site', telegramFactory = createTelegram,
+  telegramToken, publicOrigin = 'http://localhost:4177', telegramFactory = createTelegram,
   telegramCoordinatorId,
 } = {}) {
   if (typeof password !== 'string' || (password.length < 12 && !/^[0-9]{4}$/.test(password))) {
@@ -936,7 +936,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     secureCookie: process.env.SECURE_COOKIE === '1',
     telegramToken: process.env.TELEGRAM_BOT_TOKEN,
     telegramCoordinatorId: process.env.TELEGRAM_COORDINATOR_ID,
-    publicOrigin: process.env.PUBLIC_ORIGIN,
+    publicOrigin: process.env.PUBLIC_ORIGIN || `http://localhost:${port}`,
     demo,
   })
   server.listen(port, host, () => console.log(`Трекер доступен по адресу http://${host}:${server.address().port}`))

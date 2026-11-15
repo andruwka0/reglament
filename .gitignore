@@ -1,0 +1,9 @@
+# Local server settings and data are outside version control.
+*.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+/data/
